@@ -92,9 +92,6 @@ Authorization: Bearer <token>
 
 ---
 
-> **Дополнения фронтенда (черновик).** Всё ниже — предложения фронтенда: какие эндпоинты нужны интерфейсу. Схемы БД пока нет, поэтому поля примерные; названия и форму ответа можно менять, если сохраняется смысл. Соглашения взяты из разделов выше: UUID, snake_case, RFC 7807, префикс `/api/go/v1`.
-> Колонка «Приоритет» в сводной таблице (раздел 13): **MVP** — без этого не собрать первую версию; **Позже** — нужно, чтобы заранее заложить UI.
-
 ### 1.1. Роли
 `STUDENT`, `CURATOR`, `ADMIN`.
 
@@ -102,7 +99,9 @@ Authorization: Bearer <token>
 |---|---|
 | `STUDENT` | Видит только свои опубликованные задания и свои оценки, загружает работы, подаёт апелляции |
 | `CURATOR` | CRUD заданий в своих практиках, просмотр сдач, оценивание, возврат на доработку |
-| `ADMIN` | Пользователи и роли, практики, просмотр всего, разбор апелляций, логи, выгрузка оценок |
+| `ADMIN` | Работает через админ-панель: пользователи, практики, просмотр всего, разбор апелляций, логи, выгрузка оценок. Отдельной роли модератора нет — его функции входят в админ-панель |
+
+Пользователей создаёт только `ADMIN`, самостоятельной регистрации нет.
 
 Сервер сам фильтрует данные по роли: фронт не должен получать чужие данные, даже если в запросе подставлен чужой `id`.
 
@@ -123,10 +122,10 @@ Authorization: Bearer <token>
 - Скачивание: бинарный ответ с заголовком `Content-Disposition: attachment; filename*=UTF-8''<имя>`. Фронт берёт исходное имя файла из этого заголовка.
 - В списках и карточках возвращается только `file` с метаданными (`original_name`, `mime_type`, `size_bytes`, `uploaded_at`, `download_url`), без содержимого.
 
-### 1.4. Дополнительные коды ошибок
-Формат ответа тот же, RFC 7807.
+### 1.4. Коды ошибок
+Формат ответа — RFC 7807, как в разделе 1.
 
-- **400 `invalid_request`** — уже есть. Дополнение: при ошибках валидации полей добавлять расширение `errors`, чтобы фронт подсветил поля формы:
+- **400 `invalid_request`** — при ошибках валидации полей в ответ добавляется расширение `errors`, чтобы фронт подсветил поля формы:
   ```json
   {
     "type": "about:blank", "title": "Invalid request", "status": 400,
@@ -140,7 +139,8 @@ Authorization: Bearer <token>
 - **409 `invalid_status_transition`** — действие недопустимо в текущем статусе (например, оценить сдачу, которая не в `under_review`).
 - **409 `submission_already_exists`** — у студента уже есть активная сдача по этому заданию.
 - **409 `assignment_not_published`** — сдача невозможна: задание в черновике.
-- **409 `deadline_passed`** — дедлайн прошёл, поздняя сдача запрещена.
+- **409 `deadline_passed`** — дедлайн прошёл; сдать работу после дедлайна нельзя.
+- **401 `invalid_refresh_token`** — refresh-токен отсутствует, истёк или отозван; фронт отправляет пользователя на страницу входа.
 - **409 `assignment_locked_field`** — после первой сдачи нельзя менять `max_score`, а после публикации — получателей.
 - **409 `appeal_window_closed`** — срок подачи апелляции истёк.
 - **409 `email_taken`** — email уже занят.
@@ -154,7 +154,7 @@ Authorization: Bearer <token>
 
 **Тип задания** (`assignment.type`): `task` — задание, `report` — отчёт.
 
-**Сдача** (`submission.status`) — по ТЗ:
+**Сдача** (`submission.status`):
 ```
 загрузка файла → submitted
 куратор взял на проверку → under_review
@@ -163,16 +163,37 @@ Authorization: Bearer <token>
 revision → студент перезагрузил файл → submitted
 ```
 
-**Состояние задания для студента** (`student_state`, вычисляется сервером, не хранится): `not_submitted`, `overdue`, `submitted`, `under_review`, `revision`, `graded`. Используется для фильтров, бейджей и счётчиков на дашборде. Считается на бэке, чтобы у фронта не было расхождений.
+**Состояние задания для студента** (`student_state`, вычисляется сервером, не хранится): `not_submitted`, `overdue`, `submitted`, `under_review`, `revision`, `graded`. Используется для фильтров, бейджей и счётчиков на дашборде.
 
 **Апелляция** (`appeal.status`): `submitted` → `under_review` → `accepted` | `rejected`.
 
+### 1.6. Разработка
+- CORS: разрешён origin фронта `http://localhost:5173` с `credentials` (нужно для refresh-cookie).
+- Swagger-документация публикуется вместе с бэкендом.
+
 ---
 
-### 2.1. Авторизация — дополнения
+### 2.1. Авторизация (продолжение)
+
+#### POST /api/go/v1/auth/refresh
+Обновление access-токена. При входе (`POST /auth/login`) сервер дополнительно ставит refresh-токен в cookie:
+`Set-Cookie: refresh_token=…; HttpOnly; Secure; SameSite=Strict; Path=/api/go/v1/auth`.
+Фронт вызывает `/auth/refresh`, когда получает `401 unauthorized`, и повторяет исходный запрос с новым токеном.
+
+**Request:** тела нет, refresh-токен передаётся в cookie.
+
+**Response** `200 OK` (refresh-токен ротируется — приходит новая cookie):
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9…",
+  "token_type": "Bearer",
+  "expires_in": 900
+}
+```
+**Ошибки:** `401 invalid_refresh_token`.
 
 #### POST /api/go/v1/auth/logout
-Выход. Если токены не хранятся на сервере, эндпоинт нужен хотя бы для журнала входов и выходов; фронт в любом случае удаляет токен у себя.
+Выход: сервер отзывает refresh-токен и очищает cookie.
 
 **Response:** `204 No Content`
 
@@ -193,8 +214,8 @@ revision → студент перезагрузил файл → submitted
 **Response:** `204 No Content`
 **Ошибки:** `401 invalid_credentials` — неверный текущий пароль; `400 invalid_request` — слабый новый пароль.
 
-#### Дополнение к ответу `GET /auth/me`
-Чтобы фронт при старте сразу построил навигацию, удобно получать в ответе ещё и практики:
+#### Расширенный ответ `GET /auth/me`
+В ответе также возвращаются практики пользователя — по ним фронт строит навигацию при старте:
 ```json
 {
   "id": "550e8400-e29b-41d4-a716-446655440000",
@@ -221,7 +242,7 @@ revision → студент перезагрузил файл → submitted
 {
   "role": "STUDENT",
   "counters": { "to_submit": 2, "overdue": 1, "on_review": 1, "graded": 3, "total": 7 },
-  "score": { "total": 37, "max": 52, "average_percent": 71.2 },
+  "score": { "total": 37, "max": 52 },
   "upcoming_deadlines": [
     {
       "assignment": { "id": "…", "title": "Отчёт о практике", "type": "report", "deadline": "2026-06-20T18:59:00Z", "max_score": 10 },
@@ -314,10 +335,10 @@ revision → студент перезагрузил файл → submitted
 
 ### 5. Практики (курсы-группы)
 
-Практика — это курс с датами, куратором и составом студентов (на схеме «Курсы практики»).
+Практика — это курс с датами, группой студентов и куратором. Обычно куратор один, но их может быть несколько, поэтому кураторы передаются массивом.
 
 #### GET /api/go/v1/practices
-`ADMIN` получает все практики, `CURATOR` — свои, `STUDENT` — те, где он участник.
+`ADMIN` получает все практики, `CURATOR` — те, где он куратор, `STUDENT` — те, где он участник.
 
 **Query:** `curator_id`, `active` (идёт сейчас), `search`, `page`, `page_size`.
 
@@ -331,7 +352,7 @@ revision → студент перезагрузил файл → submitted
       "description": "Учебная практика ИРИТ-РТФ",
       "start_date": "2026-06-01",
       "end_date": "2026-06-28",
-      "curator": { "id": "…", "full_name": "Анна Петрова" },
+      "curators": [ { "id": "…", "full_name": "Анна Петрова" } ],
       "students_count": 25,
       "assignments_count": 4
     }
@@ -347,21 +368,22 @@ revision → студент перезагрузил файл → submitted
   "description": "…",
   "start_date": "2026-06-01",
   "end_date": "2026-06-28",
-  "curator_id": "…"
+  "curator_ids": ["…"]
 }
 ```
-**Response** `201 Created`. **Ошибки:** `400 invalid_request` (например, `end_date` раньше `start_date`, или `curator_id` указывает не на куратора).
+`curator_ids` — минимум один пользователь с ролью `CURATOR`.
+**Response** `201 Created`. **Ошибки:** `400 invalid_request` (например, `end_date` раньше `start_date`, пустой `curator_ids` или в нём не куратор).
 
 #### GET /api/go/v1/practices/{id}
 **Response** `200 OK` — объект практики. **Ошибки:** `404 practice_not_found`.
 
 #### PATCH /api/go/v1/practices/{id} (ADMIN)
-Изменение полей, в том числе смена куратора (`curator_id`).
+Изменение полей, в том числе состава кураторов (`curator_ids` — полный новый список).
 
 #### DELETE /api/go/v1/practices/{id} (ADMIN)
 **Response:** `204 No Content`. **Ошибки:** `409 practice_not_empty`.
 
-#### GET /api/go/v1/practices/{id}/students (ADMIN, CURATOR этой практики)
+#### GET /api/go/v1/practices/{id}/students (ADMIN, кураторы этой практики)
 Состав практики. Нужен для выбора получателя задания и для ведомости.
 ```json
 [ { "id": "…", "full_name": "Мария Орлова", "email": "orlova@uni.ru" } ]
@@ -384,7 +406,7 @@ revision → студент перезагрузил файл → submitted
 #### GET /api/go/v1/assignments
 Страница заданий с фильтрами.
 - `STUDENT` получает только опубликованные задания, адресованные ему (всей практике или лично). В каждом элементе есть `my_submission` и `student_state`.
-- `CURATOR` получает свои задания, включая черновики. В каждом элементе есть `stats`.
+- `CURATOR` получает задания своих практик, включая черновики. В каждом элементе есть `stats`.
 
 **Query:** `practice_id`, `status` (`draft` | `published`), `type`, `student_state`, `deadline_from`, `deadline_to` (для календаря дедлайнов), `search`, `sort` (`deadline`, `-created_at`), `page`, `page_size`.
 
@@ -459,7 +481,7 @@ revision → студент перезагрузил файл → submitted
   {
     "student": { "id": "…", "full_name": "Мария Орлова" },
     "student_state": "submitted",
-    "submission": { "id": "…", "status": "submitted", "submitted_at": "2026-06-15T10:42:00Z", "is_late": false, "score": null }
+    "submission": { "id": "…", "status": "submitted", "submitted_at": "2026-06-15T10:42:00Z", "score": null }
   },
   {
     "student": { "id": "…", "full_name": "Денис Соколов" },
@@ -497,7 +519,6 @@ revision → студент перезагрузил файл → submitted
   "student": { "id": "…", "full_name": "Иванов Иван Иванович" },
   "status": "graded",
   "submitted_at": "2026-06-15T10:42:00Z",
-  "is_late": false,
   "comment": "Отчёт по выполненным задачам",
   "file": {
     "original_name": "Отчёт.pdf",
@@ -522,12 +543,12 @@ revision → студент перезагрузил файл → submitted
 Скачивание файла (автор сдачи, куратор, админ). Ответ — бинарный, см. раздел 1.3.
 
 #### PUT /api/go/v1/submissions/{id}/file (STUDENT — автор)
-Повторная загрузка файла после возврата на доработку (по ТЗ: «при revision студент может перезагрузить файл»). Работает только в статусе `revision`; статус меняется на `submitted`, предыдущий результат проверки сохраняется в истории.
+Повторная загрузка файла после возврата на доработку. Работает только в статусе `revision`; статус меняется на `submitted`, предыдущий результат проверки сохраняется в истории.
 Тело — `multipart/form-data`: `file`, `comment`.
 **Ошибки:** `409 invalid_status_transition`, `413 file_too_large`, `415 unsupported_file_type`.
 
 #### POST /api/go/v1/submissions/{id}/take (CURATOR)
-Взять сдачу на проверку: `submitted` → `under_review`, проверяющим становится текущий куратор. Вынесено в отдельный POST, чтобы простой просмотр сдачи (GET) не менял её статус. Повторный вызов тем же куратором возвращает `200` без изменений.
+Взять сдачу на проверку: `submitted` → `under_review`, проверяющим становится текущий куратор. Просмотр сдачи (GET) статус не меняет. Повторный вызов тем же куратором возвращает `200` без изменений.
 
 #### PUT /api/go/v1/submissions/{id}/review (CURATOR)
 Сохранить результат проверки без публикации: студент его пока не видит. Работает только в статусе `under_review`.
@@ -559,7 +580,7 @@ revision → студент перезагрузил файл → submitted
 Страница «Оценки» студента. Возвращаются только опубликованные результаты.
 ```json
 {
-  "summary": { "total_score": 37, "total_max_score": 52, "average_percent": 71.2, "graded_count": 4, "assignments_count": 6 },
+  "summary": { "total_score": 37, "total_max_score": 52, "graded_count": 4, "assignments_count": 6 },
   "items": [
     {
       "assignment": { "id": "…", "title": "Прототип ЛК", "type": "task", "max_score": 15 },
@@ -573,7 +594,7 @@ revision → студент перезагрузил файл → submitted
 }
 ```
 
-#### GET /api/go/v1/grades/sheet?practice_id={id} (CURATOR своей практики, ADMIN)
+#### GET /api/go/v1/grades/sheet?practice_id={id} (кураторы практики, ADMIN)
 Ведомость практики: матрица «студенты × задания».
 ```json
 {
@@ -600,16 +621,17 @@ revision → студент перезагрузил файл → submitted
 **Response** `200 OK` — файл; `Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` или `text/csv`.
 
 #### PATCH /api/go/v1/submissions/{id}/score (ADMIN)
-Ручное изменение оценки администратором (по бизнес-процессу: «Изменение оценок работ»). Изменение пишется в журнал.
+Ручное изменение оценки администратором. Изменение пишется в журнал.
 ```json
 { "score": 10, "reason": "Исправление ошибки при вводе" }
 ```
 
 ---
 
-### 9. Апелляции (по ТЗ)
+### 9. Апелляции
 
-Подать апелляцию можно только после `graded`, в течение N дней (значение настраивается, см. раздел 12).
+Апелляция — просьба студента пересмотреть опубликованную оценку. Студент подаёт её из карточки сдачи, админ разбирает в админ-панели и либо оставляет оценку, либо выставляет новую.
+Подать апелляцию можно только после `graded`, в течение N дней (`appeal_window_days`, раздел 12), и только одну на сдачу.
 
 #### POST /api/go/v1/submissions/{id}/appeals (STUDENT — автор)
 ```json
@@ -646,7 +668,7 @@ revision → студент перезагрузил файл → submitted
 ```json
 { "decision": "accepted", "new_score": 8, "comment": "Раздел 3 засчитан" }
 ```
-`decision` принимает значения `accepted` | `rejected`. При `accepted` поле `new_score` обязательно.
+`decision` принимает значения `accepted` | `rejected`. При `accepted` поле `new_score` обязательно — оценка в сдаче заменяется на неё.
 
 ---
 
@@ -681,10 +703,10 @@ revision → студент перезагрузил файл → submitted
 
 ---
 
-### 11. Журнал действий (ADMIN, по ТЗ)
+### 11. Журнал действий (ADMIN)
 
 #### GET /api/go/v1/audit-logs
-По ТЗ логируются: создание и изменение заданий, оценок, смена ролей, вход.
+Логируются: создание и изменение заданий, оценок, смена ролей, вход.
 **Query:** `action`, `actor_id`, `entity_type`, `from`, `to`, `page`, `page_size`.
 ```json
 {
@@ -708,10 +730,8 @@ revision → студент перезагрузил файл → submitted
 ### 12. Настройки системы (ADMIN)
 
 #### GET /api/go/v1/settings · PATCH /api/go/v1/settings
-По ТЗ поздняя сдача и срок апелляции настраиваются.
 ```json
 {
-  "allow_late_submission": false,
   "appeal_window_days": 3,
   "max_file_size_bytes": 20000000,
   "allowed_file_types": ["pdf", "docx", "zip"]
@@ -723,55 +743,51 @@ revision → студент перезагрузил файл → submitted
 
 ### 13. Сводная таблица эндпоинтов
 
-| Метод | Путь | Роли | Приоритет |
-|---|---|---|---|
-| POST | /auth/login | все | MVP (есть) |
-| GET | /auth/me | все | MVP (есть) |
-| POST | /auth/logout | все | MVP |
-| PATCH | /auth/me | все | MVP |
-| POST | /auth/change-password | все | Позже |
-| GET | /dashboard | все | MVP |
-| GET, POST | /users | ADMIN (GET — ещё CURATOR) | MVP |
-| GET, PATCH | /users/{id} | ADMIN | MVP |
-| POST | /users/{id}/reset-password | ADMIN | MVP |
-| GET, POST | /practices | все / ADMIN | MVP |
-| GET, PATCH, DELETE | /practices/{id} | все / ADMIN | MVP |
-| GET, POST | /practices/{id}/students | ADMIN, CURATOR / ADMIN | MVP |
-| DELETE | /practices/{id}/students/{student_id} | ADMIN | MVP |
-| GET, POST | /assignments | все / CURATOR | MVP |
-| GET, PATCH, DELETE | /assignments/{id} | все / CURATOR | MVP |
-| POST | /assignments/{id}/publish | CURATOR | MVP |
-| GET | /assignments/{id}/submissions | CURATOR, ADMIN | MVP |
-| POST | /assignments/{id}/submissions | STUDENT | MVP |
-| GET | /submissions | все | MVP |
-| GET | /submissions/{id} | все | MVP |
-| GET | /submissions/{id}/file | все | MVP |
-| PUT | /submissions/{id}/file | STUDENT | MVP (по ТЗ) |
-| POST | /submissions/{id}/take | CURATOR | MVP |
-| PUT | /submissions/{id}/review | CURATOR | MVP |
-| POST | /submissions/{id}/review/publish | CURATOR | MVP |
-| GET | /submissions/{id}/history | все | Позже |
-| GET | /grades/my | STUDENT | MVP |
-| GET | /grades/sheet | CURATOR, ADMIN | MVP |
-| GET | /grades/export | CURATOR, ADMIN | Позже |
-| PATCH | /submissions/{id}/score | ADMIN | Позже |
-| POST | /submissions/{id}/appeals | STUDENT | MVP (по ТЗ) |
-| GET | /appeals, /appeals/{id} | STUDENT, ADMIN | MVP (по ТЗ) |
-| POST | /appeals/{id}/resolve | ADMIN | MVP (по ТЗ) |
-| GET | /notifications | все | Позже |
-| POST | /notifications/read | все | Позже |
-| GET | /audit-logs | ADMIN | MVP (по ТЗ) |
-| GET, PATCH | /settings | все / ADMIN | Позже |
+Все пути указаны относительно `/api/go/v1`.
+
+| Метод | Путь | Роли | Описание | Приоритет |
+|---|---|---|---|---|
+| POST | /auth/login | все | Вход, выдача токенов | MVP |
+| GET | /auth/me | все | Текущий пользователь и его практики | MVP |
+| POST | /auth/refresh | все | Обновление access-токена | MVP |
+| POST | /auth/logout | все | Выход, отзыв refresh-токена | MVP |
+| PATCH | /auth/me | все | Редактирование своего профиля | MVP |
+| POST | /auth/change-password | все | Смена своего пароля | Позже |
+| GET | /dashboard | все | Данные главного экрана по роли | MVP |
+| GET, POST | /users | ADMIN (GET — ещё CURATOR) | Список и создание пользователей | MVP |
+| GET, PATCH | /users/{id} | ADMIN | Карточка, редактирование, блокировка | MVP |
+| POST | /users/{id}/reset-password | ADMIN | Сброс пароля пользователю | MVP |
+| GET, POST | /practices | все / ADMIN | Список и создание практик | MVP |
+| GET, PATCH, DELETE | /practices/{id} | все / ADMIN | Карточка, правка, удаление практики | MVP |
+| GET, POST | /practices/{id}/students | ADMIN, CURATOR / ADMIN | Состав практики, добавление студентов | MVP |
+| DELETE | /practices/{id}/students/{student_id} | ADMIN | Исключение студента из практики | MVP |
+| GET, POST | /assignments | все / CURATOR | Список заданий, создание черновика | MVP |
+| GET, PATCH, DELETE | /assignments/{id} | все / CURATOR | Карточка, правка, удаление черновика | MVP |
+| POST | /assignments/{id}/publish | CURATOR | Публикация задания студентам | MVP |
+| GET | /assignments/{id}/submissions | CURATOR, ADMIN | Все получатели задания и их сдачи | MVP |
+| POST | /assignments/{id}/submissions | STUDENT | Сдача работы (файл) | MVP |
+| GET | /submissions | все | Список сдач, очередь проверки | MVP |
+| GET | /submissions/{id} | все | Подробности сдачи и проверки | MVP |
+| GET | /submissions/{id}/file | все | Скачивание файла сдачи | MVP |
+| PUT | /submissions/{id}/file | STUDENT | Повторная загрузка после доработки | MVP |
+| POST | /submissions/{id}/take | CURATOR | Взять сдачу на проверку | MVP |
+| PUT | /submissions/{id}/review | CURATOR | Сохранить оценку без публикации | MVP |
+| POST | /submissions/{id}/review/publish | CURATOR | Опубликовать оценку студенту | MVP |
+| GET | /submissions/{id}/history | все | История попыток и проверок | Позже |
+| GET | /grades/my | STUDENT | Мои оценки и общий балл | MVP |
+| GET | /grades/sheet | CURATOR, ADMIN | Ведомость «студенты × задания» | MVP |
+| GET | /grades/export | CURATOR, ADMIN | Выгрузка оценок в Excel/CSV | Позже |
+| PATCH | /submissions/{id}/score | ADMIN | Ручная правка оценки | Позже |
+| POST | /submissions/{id}/appeals | STUDENT | Подача апелляции на оценку | MVP |
+| GET | /appeals, /appeals/{id} | STUDENT, ADMIN | Список и карточка апелляций | MVP |
+| POST | /appeals/{id}/resolve | ADMIN | Решение по апелляции | MVP |
+| GET | /notifications | все | Список уведомлений | Позже |
+| POST | /notifications/read | все | Отметить уведомления прочитанными | Позже |
+| GET | /audit-logs | ADMIN | Журнал действий | MVP |
+| GET, PATCH | /settings | все / ADMIN | Настройки системы | Позже |
 
 ---
 
-### 14. Открытые вопросы к бэкенду
+### 14. Открытые вопросы
 
-1. **Роли.** В ТЗ указан `moderator`, в аналитике — `admin`. Здесь используется `ADMIN`. Нужна ли отдельная роль `MODERATOR` (разбор апелляций и логи без управления пользователями)?
-2. **Админ-панель.** Это отдельный сервис (`backend-admin`)? Если да, какой у неё префикс: `/api/admin/v1/...`? Тогда разделы 4, 5 (запись), 11 и 12 переедут туда.
-3. **Срок жизни токена.** Сейчас токен действует 24 часа, refresh-токена нет. Это нормально для MVP? Если нужен refresh, предлагаем `POST /auth/refresh` с refresh-токеном в httpOnly cookie.
-4. **Ошибка `teacher_busy`.** Пример с ней («у преподавателя уже есть активная практика с этим студентом») предполагает, что практика — это пара «куратор + студент». В аналитике практика — это курс с группой студентов. Какая модель правильная?
-5. **Поздняя сдача.** Это глобальная настройка (`settings.allow_late_submission`) или флаг у каждого задания?
-6. **Средний балл.** Как считать: сумма баллов / сумма максимумов или среднее процентов по заданиям? Как округлять?
-7. **Регистрация.** Пользователей создаёт админ, или нужна самостоятельная регистрация (`POST /auth/register`)? Вход через УрФУ (SSO) — позже?
-8. **CORS.** Разрешить origin фронта в dev-режиме (`http://localhost:5173`) и прислать ссылку на Swagger, когда он появится.
+1. **Префикс админ-панели.** Если админ-панель — отдельный сервис (`backend-admin`), какой у неё префикс? Тогда эндпоинты `ADMIN` из разделов 4, 5, 8, 9, 11 и 12 переедут туда.
