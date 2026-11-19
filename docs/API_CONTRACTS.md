@@ -4,7 +4,7 @@
 
 ### Формат данных
 - Все запросы и ответы: `Content-Type: application/json`
-- Идентификаторы (ID): `UUID v4` в виде строк (например, `"id": "550e8400-e29b-41d4-a716-446655440000"`)
+- Идентификаторы (ID): целые числа (например, `"id": 15`) — по схеме БД MVP (`integer GENERATED ALWAYS AS IDENTITY`)
 - Даты и время: `ISO 8601` в UTC (например, `"2023-10-27T14:30:00Z"`)
 
 ### Формат ошибок
@@ -30,11 +30,11 @@
 ```
 
 **Список кодов ошибок:**
-- **400 `invalid_request`** — не прошла валидация тела запроса, либо переданный ID не является валидным UUID.
+- **400 `invalid_request`** — не прошла валидация тела запроса, либо переданный ID не является целым положительным числом.
 - **401 `invalid_credentials`** — неверный email или пароль при попытке входа в систему.
 - **401 `unauthorized`** — токен отсутствует, истек, невалиден или имеет неправильную подпись.
 - **403 `forbidden`** — пользователь аутентифицирован, но его `role` не позволяет выполнить это действие (например, студент пытается удалить группу).
-- **404 `practice_not_found`** — практики с таким `id` не существует в БД.
+- **404 `group_not_found`** — группы (курса практики) с таким `id` не существует в БД.
 - **500 `internal_error`** — неожиданная ошибка на сервере. Детали не раскрываются.
 
 ### 2. Авторизация
@@ -57,7 +57,7 @@
   "token_type": "Bearer",
   "expires_in": 86400,
   "user": {
-    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "id": 15,
     "email": "student@uni.ru",
     "full_name": "Иванов Иван Иванович",
     "role": "STUDENT"
@@ -79,7 +79,7 @@ Authorization: Bearer <token>
 200 OK
 ```json
 {
-  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "id": 15,
   "email": "student@uni.ru",
   "full_name": "Иванов Иван Иванович",
   "role": "STUDENT"
@@ -93,13 +93,13 @@ Authorization: Bearer <token>
 ---
 
 ### 1.1. Роли
-`STUDENT`, `CURATOR`, `ADMIN`.
+`STUDENT`, `CURATOR`, `ADMIN` (в БД хранятся в нижнем регистре: `student`, `curator`, `admin`).
 
 | Роль | Права |
 |---|---|
-| `STUDENT` | Видит только свои опубликованные задания и свои оценки, загружает работы, подаёт апелляции |
-| `CURATOR` | CRUD заданий в своих практиках, просмотр сдач, оценивание, возврат на доработку |
-| `ADMIN` | Работает через админ-панель: пользователи, практики, просмотр всего, разбор апелляций, логи, выгрузка оценок. Отдельной роли модератора нет — его функции входят в админ-панель |
+| `STUDENT` | Состоит ровно в одной группе. Видит только опубликованные задания своей группы и личные задания, сдаёт работы, видит опубликованные результаты |
+| `CURATOR` | Ведёт свои группы: CRUD заданий, проверка сдач, оценивание, возврат на доработку |
+| `ADMIN` | Работает через админ-панель: пользователи, группы, просмотр всего. Отдельной роли модератора нет |
 
 Пользователей создаёт только `ADMIN`, самостоятельной регистрации нет.
 
@@ -118,9 +118,9 @@ Authorization: Bearer <token>
 Сортировка: `?sort=deadline` (по возрастанию) или `?sort=-deadline` (по убыванию). Множественный фильтр передаётся через запятую: `?status=submitted,under_review`.
 
 ### 1.3. Файлы
-- Загрузка: `multipart/form-data`, поле `file`. Разрешены PDF, DOCX и ZIP размером до 20 МБ; тип проверяется по содержимому файла, а не по расширению.
-- Скачивание: бинарный ответ с заголовком `Content-Disposition: attachment; filename*=UTF-8''<имя>`. Фронт берёт исходное имя файла из этого заголовка.
-- В списках и карточках возвращается только `file` с метаданными (`original_name`, `mime_type`, `size_bytes`, `uploaded_at`, `download_url`), без содержимого.
+- Загрузка: `multipart/form-data`, поле `file`. Один файл на сдачу: PDF, DOCX или ZIP, от 1 байта до 20 000 000 байт. Тип проверяется по содержимому файла, а не по расширению.
+- Скачивание: бинарный ответ с заголовками `Content-Type` (исходный `mime_type`) и `Content-Disposition: attachment; filename*=UTF-8''<имя>`.
+- В списках и карточках возвращается только блок `file` с метаданными (`original_name`, `mime_type`, `size_bytes`, `download_url`), без содержимого.
 
 ### 1.4. Коды ошибок
 Формат ответа — RFC 7807, как в разделе 1.
@@ -130,42 +130,42 @@ Authorization: Bearer <token>
   {
     "type": "about:blank", "title": "Invalid request", "status": 400,
     "detail": "Проверьте заполнение полей", "code": "invalid_request",
-    "instance": "/api/go/v1/assignments",
-    "errors": [ { "field": "max_score", "message": "Должно быть целым числом больше 0" } ]
+    "instance": "/api/go/v1/assignments/12/publish",
+    "errors": [ { "field": "deadline", "message": "Обязательно для публикации" } ]
   }
   ```
+- **401 `invalid_refresh_token`** — refresh-токен отсутствует или истёк; фронт отправляет пользователя на страницу входа.
 - **403 `user_inactive`** — учётная запись заблокирована (`is_active = false`).
-- **404 `user_not_found`**, **`assignment_not_found`**, **`submission_not_found`**, **`appeal_not_found`**. Если студент запрашивает чужой ресурс, отвечать тоже 404.
+- **404 `user_not_found`**, **`assignment_not_found`**, **`submission_not_found`**. Если студент запрашивает чужой ресурс, отвечать тоже 404.
 - **409 `invalid_status_transition`** — действие недопустимо в текущем статусе (например, оценить сдачу, которая не в `under_review`).
-- **409 `submission_already_exists`** — у студента уже есть активная сдача по этому заданию.
+- **409 `submission_already_exists`** — студент уже сдавал это задание. Сдача по заданию одна, повторной отправки нет.
 - **409 `assignment_not_published`** — сдача невозможна: задание в черновике.
 - **409 `deadline_passed`** — дедлайн прошёл; сдать работу после дедлайна нельзя.
-- **401 `invalid_refresh_token`** — refresh-токен отсутствует, истёк или отозван; фронт отправляет пользователя на страницу входа.
-- **409 `assignment_locked_field`** — после первой сдачи нельзя менять `max_score`, а после публикации — получателей.
-- **409 `appeal_window_closed`** — срок подачи апелляции истёк.
-- **409 `email_taken`** — email уже занят.
-- **409 `practice_not_empty`** — нельзя удалить практику, в которой есть студенты или задания.
-- **413 `file_too_large`** — файл больше 20 МБ.
+- **409 `assignment_locked_field`** — после публикации нельзя менять получателя, после первой сдачи — `type`.
+- **409 `user_has_related_data`** — нельзя сменить роль или группу пользователя, у которого есть задания или сдачи.
+- **409 `login_taken`**, **`email_taken`** — логин или email уже заняты (сравнение без учёта регистра и пробелов по краям).
+- **409 `group_not_empty`** — нельзя удалить группу, в которой есть студенты или задания.
+- **413 `file_too_large`** — файл больше 20 000 000 байт.
 - **415 `unsupported_file_type`** — файл не PDF, не DOCX и не ZIP.
 
 ### 1.5. Статусы
 
 **Задание** (`assignment.status`): `draft` → `published`. Создаётся всегда в статусе `draft`. Студенты видят задание только после публикации.
 
-**Тип задания** (`assignment.type`): `task` — задание, `report` — отчёт.
+**Тип задания** (`assignment.type`): `task` — задание, `report` — отчёт. По умолчанию `task`.
 
 **Сдача** (`submission.status`):
 ```
 загрузка файла → submitted
 куратор взял на проверку → under_review
-опубликована оценка → graded
-возврат на доработку → revision
-revision → студент перезагрузил файл → submitted
+опубликован результат «принято» → graded
+опубликован результат «на доработку» → revision_required
 ```
+`graded` и `revision_required` — конечные статусы: повторной отправки и замены файла в MVP нет.
 
-**Состояние задания для студента** (`student_state`, вычисляется сервером, не хранится): `not_submitted`, `overdue`, `submitted`, `under_review`, `revision`, `graded`. Используется для фильтров, бейджей и счётчиков на дашборде.
+**Решение проверки** (`decision`): `accepted` | `revision_required`.
 
-**Апелляция** (`appeal.status`): `submitted` → `under_review` → `accepted` | `rejected`.
+**Состояние задания для студента** (`student_state`, вычисляется сервером, не хранится): `not_submitted`, `overdue`, `submitted`, `under_review`, `revision_required`, `graded`. Используется для фильтров, бейджей и счётчиков на дашборде. Пока результат не опубликован, студент видит `under_review`.
 
 ### 1.6. Разработка
 - CORS: разрешён origin фронта `http://localhost:5173` с `credentials` (нужно для refresh-cookie).
@@ -182,7 +182,7 @@ revision → студент перезагрузил файл → submitted
 
 **Request:** тела нет, refresh-токен передаётся в cookie.
 
-**Response** `200 OK` (refresh-токен ротируется — приходит новая cookie):
+**Response** `200 OK` (приходит новая refresh-cookie):
 ```json
 {
   "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9…",
@@ -193,12 +193,12 @@ revision → студент перезагрузил файл → submitted
 **Ошибки:** `401 invalid_refresh_token`.
 
 #### POST /api/go/v1/auth/logout
-Выход: сервер отзывает refresh-токен и очищает cookie.
+Выход: сервер очищает refresh-cookie.
 
 **Response:** `204 No Content`
 
 #### PATCH /api/go/v1/auth/me
-Редактирование своего профиля. Роль и практику пользователь сам не меняет.
+Редактирование своего профиля. Роль, группу и логин пользователь сам не меняет.
 
 **Request:**
 ```json
@@ -215,20 +215,22 @@ revision → студент перезагрузил файл → submitted
 **Ошибки:** `401 invalid_credentials` — неверный текущий пароль; `400 invalid_request` — слабый новый пароль.
 
 #### Расширенный ответ `GET /auth/me`
-В ответе также возвращаются практики пользователя — по ним фронт строит навигацию при старте:
+В ответе также возвращаются логин и группы пользователя — по ним фронт строит навигацию при старте:
 ```json
 {
-  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "id": 15,
+  "login": "ivanov",
   "email": "student@uni.ru",
   "full_name": "Иванов Иван Иванович",
   "role": "STUDENT",
   "is_active": true,
-  "practices": [
-    { "id": "7c9e6679-7425-40de-944b-e07fc1f90ae7", "name": "Учебная практика 2026 · РИ-330944" }
-  ]
+  "group": { "id": 3, "name": "Учебная практика 2026 · РИ-330944" },
+  "curated_groups": []
 }
 ```
-Для `STUDENT` это практики, где он участник; для `CURATOR` — практики, которые он ведёт; для `ADMIN` — пустой массив.
+- `STUDENT`: `group` — его группа, `curated_groups` пустой.
+- `CURATOR`: `group` = `null`, `curated_groups` — группы, которые он ведёт.
+- `ADMIN`: `group` = `null`, `curated_groups` пустой.
 
 ---
 
@@ -241,30 +243,32 @@ revision → студент перезагрузил файл → submitted
 ```json
 {
   "role": "STUDENT",
-  "counters": { "to_submit": 2, "overdue": 1, "on_review": 1, "graded": 3, "total": 7 },
-  "score": { "total": 37, "max": 52 },
+  "group": { "id": 3, "name": "Учебная практика 2026 · РИ-330944", "start_date": "2026-06-01", "end_date": "2026-06-28" },
+  "counters": { "to_submit": 2, "overdue": 1, "on_review": 1, "graded": 3, "revision_required": 0, "total": 7 },
+  "total_score": 37,
   "upcoming_deadlines": [
     {
-      "assignment": { "id": "…", "title": "Отчёт о практике", "type": "report", "deadline": "2026-06-20T18:59:00Z", "max_score": 10 },
+      "assignment": { "id": 21, "title": "Отчёт о практике", "type": "report", "deadline": "2026-06-20T18:59:00Z" },
       "student_state": "not_submitted"
     }
   ],
   "recent_results": [
-    { "submission_id": "…", "assignment_title": "Прототип ЛК", "score": 12, "max_score": 15, "published_at": "2026-06-14T10:00:00Z" }
+    { "submission_id": 40, "assignment_title": "Прототип ЛК", "decision": "accepted", "score": 12, "result_published_at": "2026-06-14T10:00:00Z" }
   ]
 }
 ```
+`total_score` — сумма опубликованных баллов студента.
 
 **Response 200 — CURATOR:**
 ```json
 {
   "role": "CURATOR",
-  "practices": [ { "id": "…", "name": "Учебная практика 2026 · РИ-330944", "students_count": 25 } ],
-  "counters": { "awaiting_review": 8, "in_my_review": 2, "drafts": 1, "published_assignments": 5 },
+  "groups": [ { "id": 3, "name": "Учебная практика 2026 · РИ-330944", "students_count": 25 } ],
+  "counters": { "awaiting_review": 8, "under_review": 2, "drafts": 1, "published_assignments": 5 },
   "review_queue": [
-    { "submission_id": "…", "student": { "id": "…", "full_name": "Мария Орлова" }, "assignment_title": "Отчёт", "submitted_at": "2026-06-15T10:42:00Z" }
+    { "submission_id": 41, "student": { "id": 16, "full_name": "Мария Орлова" }, "assignment_title": "Отчёт", "submitted_at": "2026-06-15T10:42:00Z" }
   ],
-  "upcoming_deadlines": [ { "id": "…", "title": "Отчёт", "deadline": "2026-06-20T18:59:00Z" } ]
+  "upcoming_deadlines": [ { "id": 21, "title": "Отчёт", "deadline": "2026-06-20T18:59:00Z" } ]
 }
 ```
 
@@ -272,7 +276,7 @@ revision → студент перезагрузил файл → submitted
 ```json
 {
   "role": "ADMIN",
-  "counters": { "practices": 4, "active_practices": 2, "students": 96, "curators": 5, "awaiting_review": 14, "open_appeals": 2 }
+  "counters": { "groups": 4, "active_groups": 2, "students": 96, "curators": 5, "awaiting_review": 14 }
 }
 ```
 
@@ -281,20 +285,22 @@ revision → студент перезагрузил файл → submitted
 ### 4. Пользователи (ADMIN)
 
 #### GET /api/go/v1/users
-Экран «Участники». Пользователь с ролью `CURATOR` получает только студентов своих практик.
+Экран «Участники». Пользователь с ролью `CURATOR` получает только студентов своих групп.
 
-**Query:** `role`, `practice_id`, `is_active`, `search` (поиск по ФИО и email), `page`, `page_size`, `sort` (`full_name`, `-created_at`).
+**Query:** `role`, `group_id`, `is_active`, `search` (поиск по ФИО, логину и email), `page`, `page_size`, `sort` (`full_name`, `-created_at`).
 
 **Response 200:**
 ```json
 {
   "items": [
     {
-      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "id": 15,
+      "login": "ivanov",
       "email": "student@uni.ru",
       "full_name": "Иванов Иван Иванович",
       "role": "STUDENT",
       "is_active": true,
+      "group": { "id": 3, "name": "Учебная практика 2026 · РИ-330944" },
       "created_at": "2026-09-01T08:00:00Z"
     }
   ],
@@ -306,24 +312,28 @@ revision → студент перезагрузил файл → submitted
 **Request:**
 ```json
 {
+  "login": "ivanov",
   "email": "student@uni.ru",
   "full_name": "Иванов Иван Иванович",
   "role": "STUDENT",
+  "group_id": 3,
   "password": "TempPassword123!"
 }
 ```
+`group_id` обязателен для `STUDENT` и должен быть `null` для `CURATOR` и `ADMIN`. Поэтому порядок заполнения такой: куратор → группа → студенты.
 **Response** `201 Created` — объект пользователя.
-**Ошибки:** `409 email_taken`, `400 invalid_request`.
+**Ошибки:** `409 login_taken`, `409 email_taken`, `400 invalid_request`, `404 group_not_found`.
 
 #### GET /api/go/v1/users/{id}
-**Response** `200 OK` — объект пользователя вместе с его практиками. **Ошибки:** `404 user_not_found`.
+**Response** `200 OK` — объект пользователя. **Ошибки:** `404 user_not_found`.
 
 #### PATCH /api/go/v1/users/{id}
-Изменение ФИО, email, роли, блокировка. Смена роли записывается в журнал действий (раздел 11).
+Изменение ФИО, email, роли, группы студента, блокировка.
 ```json
-{ "full_name": "…", "email": "…", "role": "CURATOR", "is_active": false }
+{ "full_name": "…", "email": "…", "role": "STUDENT", "group_id": 4, "is_active": false }
 ```
 **Response** `200 OK` — обновлённый пользователь.
+**Ошибки:** `409 user_has_related_data` — смена роли или группы при наличии заданий или сдач; `409 email_taken`.
 
 #### POST /api/go/v1/users/{id}/reset-password
 ```json
@@ -333,12 +343,12 @@ revision → студент перезагрузил файл → submitted
 
 ---
 
-### 5. Практики (курсы-группы)
+### 5. Группы (курсы практики)
 
-Практика — это курс с датами, группой студентов и куратором. Обычно куратор один, но их может быть несколько, поэтому кураторы передаются массивом.
+Группа — это курс практики: даты, один куратор и студенты. Студент состоит ровно в одной группе (её задаёт `group_id` пользователя), куратор может вести несколько групп.
 
-#### GET /api/go/v1/practices
-`ADMIN` получает все практики, `CURATOR` — те, где он куратор, `STUDENT` — те, где он участник.
+#### GET /api/go/v1/groups
+`ADMIN` получает все группы, `CURATOR` — те, которые он ведёт, `STUDENT` — свою.
 
 **Query:** `curator_id`, `active` (идёт сейчас), `search`, `page`, `page_size`.
 
@@ -347,12 +357,12 @@ revision → студент перезагрузил файл → submitted
 {
   "items": [
     {
-      "id": "7c9e6679-7425-40de-944b-e07fc1f90ae7",
+      "id": 3,
       "name": "Учебная практика 2026 · РИ-330944",
       "description": "Учебная практика ИРИТ-РТФ",
       "start_date": "2026-06-01",
       "end_date": "2026-06-28",
-      "curators": [ { "id": "…", "full_name": "Анна Петрова" } ],
+      "curator": { "id": 7, "full_name": "Анна Петрова" },
       "students_count": 25,
       "assignments_count": 4
     }
@@ -361,43 +371,32 @@ revision → студент перезагрузил файл → submitted
 }
 ```
 
-#### POST /api/go/v1/practices (ADMIN)
+#### POST /api/go/v1/groups (ADMIN)
 ```json
 {
   "name": "Учебная практика 2026 · РИ-330944",
-  "description": "…",
+  "description": "",
   "start_date": "2026-06-01",
   "end_date": "2026-06-28",
-  "curator_ids": ["…"]
+  "curator_id": 7
 }
 ```
-`curator_ids` — минимум один пользователь с ролью `CURATOR`.
-**Response** `201 Created`. **Ошибки:** `400 invalid_request` (например, `end_date` раньше `start_date`, пустой `curator_ids` или в нём не куратор).
+**Response** `201 Created`. **Ошибки:** `400 invalid_request` (например, `end_date` раньше `start_date` или `curator_id` указывает не на куратора).
 
-#### GET /api/go/v1/practices/{id}
-**Response** `200 OK` — объект практики. **Ошибки:** `404 practice_not_found`.
+#### GET /api/go/v1/groups/{id}
+**Response** `200 OK` — объект группы. **Ошибки:** `404 group_not_found`.
 
-#### PATCH /api/go/v1/practices/{id} (ADMIN)
-Изменение полей, в том числе состава кураторов (`curator_ids` — полный новый список).
+#### PATCH /api/go/v1/groups/{id} (ADMIN)
+Изменение полей, в том числе смена куратора (`curator_id`).
 
-#### DELETE /api/go/v1/practices/{id} (ADMIN)
-**Response:** `204 No Content`. **Ошибки:** `409 practice_not_empty`.
+#### DELETE /api/go/v1/groups/{id} (ADMIN)
+**Response:** `204 No Content`. **Ошибки:** `409 group_not_empty`.
 
-#### GET /api/go/v1/practices/{id}/students (ADMIN, кураторы этой практики)
-Состав практики. Нужен для выбора получателя задания и для ведомости.
+#### GET /api/go/v1/groups/{id}/students (ADMIN, куратор группы)
+Состав группы. Нужен для выбора личного получателя задания и для ведомости. Студент добавляется в группу через `POST /users` или `PATCH /users/{id}` с `group_id`.
 ```json
-[ { "id": "…", "full_name": "Мария Орлова", "email": "orlova@uni.ru" } ]
+[ { "id": 16, "full_name": "Мария Орлова", "email": "orlova@uni.ru" } ]
 ```
-
-#### POST /api/go/v1/practices/{id}/students (ADMIN)
-Добавление студентов в практику.
-```json
-{ "student_ids": ["…", "…"] }
-```
-**Response:** `204 No Content`.
-
-#### DELETE /api/go/v1/practices/{id}/students/{student_id} (ADMIN)
-**Response:** `204 No Content`.
 
 ---
 
@@ -405,29 +404,30 @@ revision → студент перезагрузил файл → submitted
 
 #### GET /api/go/v1/assignments
 Страница заданий с фильтрами.
-- `STUDENT` получает только опубликованные задания, адресованные ему (всей практике или лично). В каждом элементе есть `my_submission` и `student_state`.
-- `CURATOR` получает задания своих практик, включая черновики. В каждом элементе есть `stats`.
+- `STUDENT` получает только опубликованные задания своей группы и личные. В каждом элементе есть `my_submission` и `student_state`.
+- `CURATOR` получает свои задания, включая черновики. В каждом элементе есть `stats`.
 
-**Query:** `practice_id`, `status` (`draft` | `published`), `type`, `student_state`, `deadline_from`, `deadline_to` (для календаря дедлайнов), `search`, `sort` (`deadline`, `-created_at`), `page`, `page_size`.
+**Query:** `group_id`, `status` (`draft` | `published`), `type`, `student_state`, `deadline_from`, `deadline_to` (для календаря дедлайнов), `search`, `sort` (`deadline`, `-created_at`), `page`, `page_size`.
 
 **Response 200 (STUDENT):**
 ```json
 {
   "items": [
     {
-      "id": "9b2f…",
+      "id": 21,
       "title": "Отчёт о выполненной работе",
       "description": "Опишите выполненные задачи…",
       "type": "report",
       "status": "published",
       "deadline": "2026-06-20T18:59:00Z",
-      "max_score": 10,
       "criteria": "Полнота, оформление, выводы",
-      "practice": { "id": "…", "name": "Учебная практика 2026" },
-      "curator": { "id": "…", "full_name": "Анна Петрова" },
+      "curator": { "id": 7, "full_name": "Анна Петрова" },
+      "group": { "id": 3, "name": "Учебная практика 2026" },
+      "student": null,
+      "created_at": "2026-06-01T09:00:00Z",
       "published_at": "2026-06-02T09:00:00Z",
       "student_state": "under_review",
-      "my_submission": { "id": "…", "status": "under_review", "submitted_at": "2026-06-15T10:42:00Z", "score": null }
+      "my_submission": { "id": 40, "status": "under_review", "submitted_at": "2026-06-15T10:42:00Z" }
     }
   ],
   "total": 1, "page": 1, "page_size": 20
@@ -435,25 +435,24 @@ revision → студент перезагрузил файл → submitted
 ```
 **Поле `stats` для CURATOR:**
 ```json
-"stats": { "recipients": 25, "not_submitted": 5, "submitted": 8, "under_review": 2, "revision": 1, "graded": 9 }
+"stats": { "recipients": 25, "not_submitted": 5, "submitted": 8, "under_review": 2, "revision_required": 1, "graded": 9 }
 ```
 
 #### POST /api/go/v1/assignments (CURATOR)
 Создание задания. Всегда в статусе `draft`. Для черновика обязательно только поле `title`.
 ```json
 {
-  "practice_id": "…",
   "title": "Отчёт о выполненной работе",
   "description": "…",
   "type": "report",
   "deadline": "2026-06-20T18:59:00Z",
-  "max_score": 10,
   "criteria": "…",
-  "student_ids": []
+  "group_id": 3,
+  "student_id": null
 }
 ```
-Пустой `student_ids` означает «всей практике»; список ID — только этим студентам. Каждый из них должен состоять в практике.
-**Response** `201 Created` — объект задания. **Ошибки:** `403 forbidden` (чужая практика), `400 invalid_request`.
+Получатель — **либо** вся группа (`group_id`), **либо** один студент (`student_id`), но не оба сразу. В черновике оба поля могут быть пустыми. Группа должна быть группой куратора, студент — состоять в такой группе.
+**Response** `201 Created` — объект задания. **Ошибки:** `403 forbidden` (чужая группа), `400 invalid_request`.
 
 #### GET /api/go/v1/assignments/{id}
 Карточка задания (модалка «Подробности задания»). Помимо полей задания, возвращается блок `permissions`, по которому фронт показывает или скрывает кнопки:
@@ -469,7 +468,7 @@ revision → студент перезагрузил файл → submitted
 Удалить можно только черновик. **Ошибки:** `409 invalid_status_transition`.
 
 #### POST /api/go/v1/assignments/{id}/publish (CURATOR — автор)
-Переход `draft` → `published`. Сервер проверяет, что заполнены `description`, `deadline`, `max_score > 0` и `criteria`; незаполненные поля возвращаются в `errors`. Время публикации (`published_at`) ставит сервер.
+Переход `draft` → `published`. Сервер проверяет, что заполнены `description`, `deadline`, `criteria` и получатель (`group_id` или `student_id`); незаполненные поля возвращаются в `errors`. Время публикации (`published_at`) ставит сервер.
 **Response** `200 OK` — опубликованное задание.
 
 #### GET /api/go/v1/assignments/{id}/submissions (CURATOR, ADMIN)
@@ -479,12 +478,12 @@ revision → студент перезагрузил файл → submitted
 ```json
 [
   {
-    "student": { "id": "…", "full_name": "Мария Орлова" },
+    "student": { "id": 16, "full_name": "Мария Орлова" },
     "student_state": "submitted",
-    "submission": { "id": "…", "status": "submitted", "submitted_at": "2026-06-15T10:42:00Z", "score": null }
+    "submission": { "id": 41, "status": "submitted", "submitted_at": "2026-06-15T10:42:00Z", "score": null }
   },
   {
-    "student": { "id": "…", "full_name": "Денис Соколов" },
+    "student": { "id": 17, "full_name": "Денис Соколов" },
     "student_state": "not_submitted",
     "submission": null
   }
@@ -492,9 +491,7 @@ revision → студент перезагрузил файл → submitted
 ```
 
 #### POST /api/go/v1/assignments/{id}/submissions (STUDENT)
-Сдача работы (форма с drag&drop). Тело — `multipart/form-data`:
-- `file` — обязательно;
-- `comment` — необязательно, до 3000 символов.
+Сдача работы (форма с drag&drop). Тело — `multipart/form-data`, поле `file`. Проверяющим сервер назначает куратора группы студента.
 
 Заголовок `Idempotency-Key: <uuid>` защищает от дублей при повторной отправке формы.
 **Response** `201 Created` — объект сдачи (см. раздел 7) со статусом `submitted`.
@@ -505,72 +502,57 @@ revision → студент перезагрузил файл → submitted
 ### 7. Сдачи и проверка
 
 #### GET /api/go/v1/submissions
-- `STUDENT` — свои сдачи (экран «История сдач»).
-- `CURATOR` — сдачи по своим практикам. Очередь «ждут проверки»: `?status=submitted`.
+- `STUDENT` — свои сдачи.
+- `CURATOR` — сдачи, где он проверяющий. Очередь «ждут проверки»: `?status=submitted`.
 
-**Query:** `status`, `assignment_id`, `practice_id`, `student_id`, `reviewer_id` (`me` — сдачи, которые проверяю я), `sort` (`-submitted_at`), `page`, `page_size`.
+**Query:** `status`, `assignment_id`, `group_id`, `student_id`, `sort` (`-submitted_at`), `page`, `page_size`.
 
 #### GET /api/go/v1/submissions/{id}
 Подробности сдачи (модалка «Подробности проверки»).
 ```json
 {
-  "id": "…",
-  "assignment": { "id": "…", "title": "Отчёт", "type": "report", "deadline": "2026-06-20T18:59:00Z", "max_score": 10 },
-  "student": { "id": "…", "full_name": "Иванов Иван Иванович" },
+  "id": 40,
+  "assignment": { "id": 21, "title": "Отчёт", "type": "report", "deadline": "2026-06-20T18:59:00Z" },
+  "student": { "id": 15, "full_name": "Иванов Иван Иванович" },
+  "curator": { "id": 7, "full_name": "Анна Петрова" },
   "status": "graded",
   "submitted_at": "2026-06-15T10:42:00Z",
-  "comment": "Отчёт по выполненным задачам",
   "file": {
     "original_name": "Отчёт.pdf",
     "mime_type": "application/pdf",
     "size_bytes": 1048576,
-    "uploaded_at": "2026-06-15T10:42:00Z",
-    "download_url": "/api/go/v1/submissions/…/file"
+    "download_url": "/api/go/v1/submissions/40/file"
   },
-  "review": {
+  "result": {
+    "decision": "accepted",
     "score": 9,
     "feedback": "Хорошо, добавьте выводы",
-    "reviewer": { "id": "…", "full_name": "Анна Петрова" },
     "graded_at": "2026-06-16T12:00:00Z",
-    "published_at": "2026-06-16T12:00:00Z"
+    "result_published_at": "2026-06-16T12:00:00Z"
   },
-  "permissions": { "can_take": false, "can_review": false, "can_reupload": false, "can_appeal": true }
+  "permissions": { "can_take": false, "can_review": false, "can_publish": false }
 }
 ```
-Студент получает `review: null`, пока результат не опубликован.
+Студент получает `result: null`, пока результат не опубликован.
 
 #### GET /api/go/v1/submissions/{id}/file
-Скачивание файла (автор сдачи, куратор, админ). Ответ — бинарный, см. раздел 1.3.
+Скачивание файла (автор сдачи, проверяющий куратор, админ). Ответ — бинарный, см. раздел 1.3.
 
-#### PUT /api/go/v1/submissions/{id}/file (STUDENT — автор)
-Повторная загрузка файла после возврата на доработку. Работает только в статусе `revision`; статус меняется на `submitted`, предыдущий результат проверки сохраняется в истории.
-Тело — `multipart/form-data`: `file`, `comment`.
-**Ошибки:** `409 invalid_status_transition`, `413 file_too_large`, `415 unsupported_file_type`.
+#### POST /api/go/v1/submissions/{id}/take (CURATOR — проверяющий)
+Взять сдачу на проверку: `submitted` → `under_review`. Просмотр сдачи (GET) статус не меняет. Повторный вызов возвращает `200` без изменений.
 
-#### POST /api/go/v1/submissions/{id}/take (CURATOR)
-Взять сдачу на проверку: `submitted` → `under_review`, проверяющим становится текущий куратор. Просмотр сдачи (GET) статус не меняет. Повторный вызов тем же куратором возвращает `200` без изменений.
-
-#### PUT /api/go/v1/submissions/{id}/review (CURATOR)
-Сохранить результат проверки без публикации: студент его пока не видит. Работает только в статусе `under_review`.
+#### PUT /api/go/v1/submissions/{id}/review (CURATOR — проверяющий)
+Сохранить результат проверки без публикации: студент его пока не видит. Работает только в статусе `under_review`, сохранённый результат можно перезаписать до публикации. Время проверки (`graded_at`) ставит сервер.
 ```json
 { "decision": "accepted", "score": 9, "feedback": "Хорошо, добавьте выводы" }
 ```
-- `decision`: `accepted` | `revision`;
-- при `accepted` поле `score` обязательно: целое число от 0 до `max_score`;
-- при `revision` поле `feedback` обязательно.
+- `decision`: `accepted` | `revision_required`;
+- при `accepted` поле `score` обязательно: целое число ≥ 0;
+- при `revision_required` поле `feedback` обязательно.
 
-#### POST /api/go/v1/submissions/{id}/review/publish (CURATOR)
-Опубликовать результат студенту: `under_review` → `graded` или `revision`. Можно передать то же тело, что в `PUT /review`, чтобы сохранить и опубликовать одним запросом.
+#### POST /api/go/v1/submissions/{id}/review/publish (CURATOR — проверяющий)
+Опубликовать результат студенту: `under_review` → `graded` (при `accepted`) или `revision_required`. Время публикации (`result_published_at`) ставит сервер. Можно передать то же тело, что в `PUT /review`, чтобы сохранить и опубликовать одним запросом. Опубликованный результат не меняется.
 **Response** `200 OK` — сдача. **Ошибки:** `409 invalid_status_transition`, `400 invalid_request`.
-
-#### GET /api/go/v1/submissions/{id}/history
-История попыток и проверок по сдаче (экран «Сравнить оценки попыток»).
-```json
-[
-  { "attempt": 1, "submitted_at": "…", "file": { "original_name": "v1.pdf", "download_url": "…" }, "decision": "revision", "score": null, "feedback": "Добавьте выводы", "published_at": "…" },
-  { "attempt": 2, "submitted_at": "…", "file": { "original_name": "v2.pdf", "download_url": "…" }, "decision": "accepted", "score": 9, "feedback": "Отлично", "published_at": "…" }
-]
-```
 
 ---
 
@@ -580,214 +562,110 @@ revision → студент перезагрузил файл → submitted
 Страница «Оценки» студента. Возвращаются только опубликованные результаты.
 ```json
 {
-  "summary": { "total_score": 37, "total_max_score": 52, "graded_count": 4, "assignments_count": 6 },
+  "summary": { "total_score": 37, "graded_count": 4, "revision_required_count": 1, "assignments_count": 6 },
   "items": [
     {
-      "assignment": { "id": "…", "title": "Прототип ЛК", "type": "task", "max_score": 15 },
-      "submission_id": "…",
+      "assignment": { "id": 22, "title": "Прототип ЛК", "type": "task" },
+      "submission_id": 40,
       "status": "graded",
+      "decision": "accepted",
       "score": 12,
       "feedback": "Инструкция понятная",
-      "published_at": "2026-06-14T10:00:00Z"
+      "result_published_at": "2026-06-14T10:00:00Z"
     }
   ]
 }
 ```
+`total_score` — общая оценка: сумма опубликованных баллов.
 
-#### GET /api/go/v1/grades/sheet?practice_id={id} (кураторы практики, ADMIN)
-Ведомость практики: матрица «студенты × задания».
+#### GET /api/go/v1/grades/sheet?group_id={id} (куратор группы, ADMIN)
+Ведомость группы: матрица «студенты × задания».
 ```json
 {
-  "practice": { "id": "…", "name": "Учебная практика 2026" },
-  "assignments": [ { "id": "a1", "title": "Прототип ЛК", "max_score": 15 }, { "id": "a2", "title": "Отчёт", "max_score": 10 } ],
+  "group": { "id": 3, "name": "Учебная практика 2026" },
+  "assignments": [ { "id": 22, "title": "Прототип ЛК" }, { "id": 21, "title": "Отчёт" } ],
   "rows": [
     {
-      "student": { "id": "…", "full_name": "Иванов Иван" },
+      "student": { "id": 15, "full_name": "Иванов Иван" },
       "cells": [
-        { "assignment_id": "a1", "assigned": true, "student_state": "graded", "submission_id": "…", "score": 12 },
-        { "assignment_id": "a2", "assigned": true, "student_state": "under_review", "submission_id": "…", "score": null }
+        { "assignment_id": 22, "assigned": true, "student_state": "graded", "submission_id": 40, "score": 12 },
+        { "assignment_id": 21, "assigned": true, "student_state": "under_review", "submission_id": 43, "score": null }
       ],
-      "total_score": 12,
-      "total_max_score": 25
+      "total_score": 12
     }
   ]
 }
 ```
-Если `assigned: false`, задание этому студенту не назначено, и в ячейке выводится «Не назначено».
+Если `assigned: false`, задание этому студенту не назначено, и в ячейке выводится «Не назначено». В ячейках только опубликованные баллы.
 
-#### GET /api/go/v1/grades/export (CURATOR, ADMIN)
-Выгрузка оценок в Excel.
-**Query:** `practice_id`, `format` (`xlsx` | `csv`), `from`, `to`.
+#### GET /api/go/v1/grades/export (куратор группы, ADMIN)
+Выгрузка ведомости в Excel.
+**Query:** `group_id`, `format` (`xlsx` | `csv`).
 **Response** `200 OK` — файл; `Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` или `text/csv`.
 
-#### PATCH /api/go/v1/submissions/{id}/score (ADMIN)
-Ручное изменение оценки администратором. Изменение пишется в журнал.
-```json
-{ "score": 10, "reason": "Исправление ошибки при вводе" }
-```
+---
+
+### 9. После MVP
+
+В схеме БД MVP для этих функций таблиц нет. Эндпоинты зафиксированы, чтобы заранее заложить UI; детали — когда появятся таблицы.
+
+#### Апелляции
+Апелляция — просьба студента пересмотреть опубликованную оценку. Студент подаёт её из карточки сдачи после `graded`, админ разбирает в админ-панели и либо оставляет оценку, либо выставляет новую.
+- `POST /api/go/v1/submissions/{id}/appeals` (STUDENT) — `{ "reason": "Не учтён раздел 3 отчёта" }`.
+- `GET /api/go/v1/appeals`, `GET /api/go/v1/appeals/{id}` (STUDENT — свои, ADMIN — все). Статусы: `submitted` → `under_review` → `accepted` | `rejected`.
+- `POST /api/go/v1/appeals/{id}/resolve` (ADMIN) — `{ "decision": "accepted", "new_score": 8, "comment": "Раздел 3 засчитан" }`.
+
+#### Уведомления
+- `GET /api/go/v1/notifications?unread=true` — `{ "unread_count": 3, "items": [ { "id", "type", "title", "text", "entity": { "type", "id" }, "is_read", "created_at" } ] }`. Типы: `assignment_published`, `result_published`, `deadline_soon`.
+- `POST /api/go/v1/notifications/read` — `{ "ids": [1, 2] }` или `{ "all": true }`.
+
+#### Журнал действий (ADMIN)
+- `GET /api/go/v1/audit-logs?action=&actor_id=&from=&to=` — создание и изменение заданий, публикация результатов, смена ролей, вход. Элемент: `{ "id", "action", "actor": { "id", "full_name" }, "entity": { "type", "id" }, "changes", "created_at" }`.
 
 ---
 
-### 9. Апелляции
-
-Апелляция — просьба студента пересмотреть опубликованную оценку. Студент подаёт её из карточки сдачи, админ разбирает в админ-панели и либо оставляет оценку, либо выставляет новую.
-Подать апелляцию можно только после `graded`, в течение N дней (`appeal_window_days`, раздел 12), и только одну на сдачу.
-
-#### POST /api/go/v1/submissions/{id}/appeals (STUDENT — автор)
-```json
-{ "reason": "Не учтён раздел 3 отчёта" }
-```
-**Response** `201 Created` — апелляция. **Ошибки:** `409 appeal_window_closed`, `409 invalid_status_transition` (сдача не в `graded`, или апелляция уже подана).
-
-#### GET /api/go/v1/appeals
-`STUDENT` получает свои апелляции, `ADMIN` — все.
-**Query:** `status`, `practice_id`, `page`, `page_size`.
-```json
-{
-  "items": [
-    {
-      "id": "…",
-      "submission": { "id": "…", "assignment_title": "Отчёт", "student": { "id": "…", "full_name": "Иванов Иван" } },
-      "reason": "Не учтён раздел 3 отчёта",
-      "status": "submitted",
-      "old_score": 6,
-      "new_score": null,
-      "resolution_comment": null,
-      "created_at": "…",
-      "resolved_at": null
-    }
-  ],
-  "total": 1, "page": 1, "page_size": 20
-}
-```
-
-#### GET /api/go/v1/appeals/{id}
-**Ошибки:** `404 appeal_not_found`.
-
-#### POST /api/go/v1/appeals/{id}/resolve (ADMIN)
-```json
-{ "decision": "accepted", "new_score": 8, "comment": "Раздел 3 засчитан" }
-```
-`decision` принимает значения `accepted` | `rejected`. При `accepted` поле `new_score` обязательно — оценка в сдаче заменяется на неё.
-
----
-
-### 10. Уведомления
-
-#### GET /api/go/v1/notifications
-**Query:** `unread` (true/false), `page`, `page_size`.
-```json
-{
-  "unread_count": 3,
-  "items": [
-    {
-      "id": "…",
-      "type": "review_published",
-      "title": "Работа проверена",
-      "text": "«Отчёт» — 9 из 10",
-      "entity": { "type": "submission", "id": "…" },
-      "is_read": false,
-      "created_at": "…"
-    }
-  ],
-  "total": 3, "page": 1, "page_size": 20
-}
-```
-Типы уведомлений (`type`): `assignment_published`, `review_published`, `deadline_soon`, `appeal_resolved`.
-
-#### POST /api/go/v1/notifications/read
-```json
-{ "ids": ["…"] }
-```
-или `{ "all": true }`. **Response:** `204 No Content`.
-
----
-
-### 11. Журнал действий (ADMIN)
-
-#### GET /api/go/v1/audit-logs
-Логируются: создание и изменение заданий, оценок, смена ролей, вход.
-**Query:** `action`, `actor_id`, `entity_type`, `from`, `to`, `page`, `page_size`.
-```json
-{
-  "items": [
-    {
-      "id": "…",
-      "action": "role_changed",
-      "actor": { "id": "…", "full_name": "Админ" },
-      "entity": { "type": "user", "id": "…" },
-      "changes": { "role": { "from": "STUDENT", "to": "CURATOR" } },
-      "created_at": "…"
-    }
-  ],
-  "total": 1, "page": 1, "page_size": 20
-}
-```
-Значения `action`: `login`, `assignment_created`, `assignment_updated`, `assignment_published`, `review_published`, `score_changed`, `role_changed`, `user_created`, `appeal_resolved`.
-
----
-
-### 12. Настройки системы (ADMIN)
-
-#### GET /api/go/v1/settings · PATCH /api/go/v1/settings
-```json
-{
-  "appeal_window_days": 3,
-  "max_file_size_bytes": 20000000,
-  "allowed_file_types": ["pdf", "docx", "zip"]
-}
-```
-Поля `max_file_size_bytes` и `allowed_file_types` только для чтения: фронт показывает их в подсказке у формы загрузки.
-
----
-
-### 13. Сводная таблица эндпоинтов
+### 10. Сводная таблица эндпоинтов
 
 Все пути указаны относительно `/api/go/v1`.
 
 | Метод | Путь | Роли | Описание | Приоритет |
 |---|---|---|---|---|
 | POST | /auth/login | все | Вход, выдача токенов | MVP |
-| GET | /auth/me | все | Текущий пользователь и его практики | MVP |
+| GET | /auth/me | все | Текущий пользователь и его группы | MVP |
 | POST | /auth/refresh | все | Обновление access-токена | MVP |
-| POST | /auth/logout | все | Выход, отзыв refresh-токена | MVP |
+| POST | /auth/logout | все | Выход | MVP |
 | PATCH | /auth/me | все | Редактирование своего профиля | MVP |
 | POST | /auth/change-password | все | Смена своего пароля | Позже |
 | GET | /dashboard | все | Данные главного экрана по роли | MVP |
 | GET, POST | /users | ADMIN (GET — ещё CURATOR) | Список и создание пользователей | MVP |
 | GET, PATCH | /users/{id} | ADMIN | Карточка, редактирование, блокировка | MVP |
 | POST | /users/{id}/reset-password | ADMIN | Сброс пароля пользователю | MVP |
-| GET, POST | /practices | все / ADMIN | Список и создание практик | MVP |
-| GET, PATCH, DELETE | /practices/{id} | все / ADMIN | Карточка, правка, удаление практики | MVP |
-| GET, POST | /practices/{id}/students | ADMIN, CURATOR / ADMIN | Состав практики, добавление студентов | MVP |
-| DELETE | /practices/{id}/students/{student_id} | ADMIN | Исключение студента из практики | MVP |
+| GET, POST | /groups | все / ADMIN | Список и создание групп | MVP |
+| GET, PATCH, DELETE | /groups/{id} | все / ADMIN | Карточка, правка, удаление группы | MVP |
+| GET | /groups/{id}/students | ADMIN, CURATOR | Состав группы | MVP |
 | GET, POST | /assignments | все / CURATOR | Список заданий, создание черновика | MVP |
 | GET, PATCH, DELETE | /assignments/{id} | все / CURATOR | Карточка, правка, удаление черновика | MVP |
-| POST | /assignments/{id}/publish | CURATOR | Публикация задания студентам | MVP |
+| POST | /assignments/{id}/publish | CURATOR | Публикация задания | MVP |
 | GET | /assignments/{id}/submissions | CURATOR, ADMIN | Все получатели задания и их сдачи | MVP |
 | POST | /assignments/{id}/submissions | STUDENT | Сдача работы (файл) | MVP |
 | GET | /submissions | все | Список сдач, очередь проверки | MVP |
-| GET | /submissions/{id} | все | Подробности сдачи и проверки | MVP |
+| GET | /submissions/{id} | все | Подробности сдачи и результата | MVP |
 | GET | /submissions/{id}/file | все | Скачивание файла сдачи | MVP |
-| PUT | /submissions/{id}/file | STUDENT | Повторная загрузка после доработки | MVP |
 | POST | /submissions/{id}/take | CURATOR | Взять сдачу на проверку | MVP |
-| PUT | /submissions/{id}/review | CURATOR | Сохранить оценку без публикации | MVP |
-| POST | /submissions/{id}/review/publish | CURATOR | Опубликовать оценку студенту | MVP |
-| GET | /submissions/{id}/history | все | История попыток и проверок | Позже |
+| PUT | /submissions/{id}/review | CURATOR | Сохранить результат без публикации | MVP |
+| POST | /submissions/{id}/review/publish | CURATOR | Опубликовать результат студенту | MVP |
 | GET | /grades/my | STUDENT | Мои оценки и общий балл | MVP |
 | GET | /grades/sheet | CURATOR, ADMIN | Ведомость «студенты × задания» | MVP |
-| GET | /grades/export | CURATOR, ADMIN | Выгрузка оценок в Excel/CSV | Позже |
-| PATCH | /submissions/{id}/score | ADMIN | Ручная правка оценки | Позже |
-| POST | /submissions/{id}/appeals | STUDENT | Подача апелляции на оценку | MVP |
-| GET | /appeals, /appeals/{id} | STUDENT, ADMIN | Список и карточка апелляций | MVP |
-| POST | /appeals/{id}/resolve | ADMIN | Решение по апелляции | MVP |
+| GET | /grades/export | CURATOR, ADMIN | Выгрузка ведомости в Excel/CSV | Позже |
+| POST | /submissions/{id}/appeals | STUDENT | Подача апелляции | Позже |
+| GET | /appeals, /appeals/{id} | STUDENT, ADMIN | Список и карточка апелляций | Позже |
+| POST | /appeals/{id}/resolve | ADMIN | Решение по апелляции | Позже |
 | GET | /notifications | все | Список уведомлений | Позже |
 | POST | /notifications/read | все | Отметить уведомления прочитанными | Позже |
-| GET | /audit-logs | ADMIN | Журнал действий | MVP |
-| GET, PATCH | /settings | все / ADMIN | Настройки системы | Позже |
+| GET | /audit-logs | ADMIN | Журнал действий | Позже |
 
 ---
 
-### 14. Открытые вопросы
+### 11. Открытые вопросы
 
-1. **Префикс админ-панели.** Если админ-панель — отдельный сервис (`backend-admin`), какой у неё префикс? Тогда эндпоинты `ADMIN` из разделов 4, 5, 8, 9, 11 и 12 переедут туда.
+1. **Префикс админ-панели.** Если админ-панель — отдельный сервис (`backend-admin`), какой у неё префикс? Тогда эндпоинты `ADMIN` из разделов 4, 5, 8 и 9 переедут туда.
