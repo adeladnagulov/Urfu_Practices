@@ -1,14 +1,15 @@
 -- +goose Up
--- MVP, 10.11.2026: 4 tables, 44 columns, 8 foreign keys.
+-- MVP, 10.11.2026: 4 tables, 45 columns, 8 foreign keys.
 -- The application checks user roles, workflow transitions, file contents,
 -- and the score against the assignment maximum.
 
-CREATE TABLE public.users (
+CREATE TABLE users (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     full_name text NOT NULL,
     login text NOT NULL,
     email text NOT NULL,
-    password_hash text NOT NULL,
+    -- Store only the hash produced by the application.
+    password text NOT NULL,
     is_active boolean NOT NULL DEFAULT true,
     created_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
     role text NOT NULL,
@@ -17,7 +18,7 @@ CREATE TABLE public.users (
     CONSTRAINT users_full_name_nonempty CHECK (full_name ~ '[^[:space:]]'),
     CONSTRAINT users_login_nonempty CHECK (btrim(login) <> ''),
     CONSTRAINT users_email_nonempty CHECK (btrim(email) <> ''),
-    CONSTRAINT users_password_hash_nonempty CHECK (btrim(password_hash) <> ''),
+    CONSTRAINT users_password_nonempty CHECK (btrim(password) <> ''),
     CONSTRAINT users_role_allowed CHECK (role IN ('student', 'curator', 'admin')),
     CONSTRAINT users_role_group_consistent CHECK (
         (role = 'student' AND group_id IS NOT NULL)
@@ -26,10 +27,10 @@ CREATE TABLE public.users (
 );
 
 -- Уникальность по тому же выражению, которое должен использовать вход.
-CREATE UNIQUE INDEX users_login_ci_uq ON public.users (lower(btrim(login)));
-CREATE UNIQUE INDEX users_email_ci_uq ON public.users (lower(btrim(email)));
+CREATE UNIQUE INDEX users_login_ci_uq ON users (lower(btrim(login)));
+CREATE UNIQUE INDEX users_email_ci_uq ON users (lower(btrim(email)));
 
-CREATE TABLE public.groups (
+CREATE TABLE groups (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     name text NOT NULL,
     description text NOT NULL DEFAULT '',
@@ -40,15 +41,15 @@ CREATE TABLE public.groups (
     CONSTRAINT groups_name_nonempty CHECK (name ~ '[^[:space:]]'),
     CONSTRAINT groups_dates_ordered CHECK (end_date >= start_date),
     CONSTRAINT groups_curator_fk FOREIGN KEY (curator_id)
-        REFERENCES public.users (id) ON UPDATE RESTRICT ON DELETE RESTRICT
+        REFERENCES users (id) ON UPDATE RESTRICT ON DELETE RESTRICT
 );
 
 -- Цикл DDL разрывается ALTER TABLE. Данные: куратор -> группа -> студент.
-ALTER TABLE public.users
+ALTER TABLE users
     ADD CONSTRAINT users_group_fk FOREIGN KEY (group_id)
-        REFERENCES public.groups (id) ON UPDATE RESTRICT ON DELETE RESTRICT;
+        REFERENCES groups (id) ON UPDATE RESTRICT ON DELETE RESTRICT;
 
-CREATE TABLE public.assignments (
+CREATE TABLE assignments (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     curator_id integer NOT NULL,
     title text NOT NULL,
@@ -64,11 +65,11 @@ CREATE TABLE public.assignments (
     student_id integer,
 
     CONSTRAINT assignments_curator_fk FOREIGN KEY (curator_id)
-        REFERENCES public.users (id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+        REFERENCES users (id) ON UPDATE RESTRICT ON DELETE RESTRICT,
     CONSTRAINT assignments_group_fk FOREIGN KEY (group_id)
-        REFERENCES public.groups (id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+        REFERENCES groups (id) ON UPDATE RESTRICT ON DELETE RESTRICT,
     CONSTRAINT assignments_student_fk FOREIGN KEY (student_id)
-        REFERENCES public.users (id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+        REFERENCES users (id) ON UPDATE RESTRICT ON DELETE RESTRICT,
     CONSTRAINT assignments_title_nonempty CHECK (title ~ '[^[:space:]]'),
     CONSTRAINT assignments_type_allowed CHECK (type IN ('task', 'report')),
     CONSTRAINT assignments_max_score_positive CHECK (max_score > 0),
@@ -93,10 +94,11 @@ CREATE TABLE public.assignments (
     )
 );
 
-CREATE TABLE public.submissions (
+CREATE TABLE submissions (
     id integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     assignment_id integer NOT NULL,
     student_id integer NOT NULL,
+    attempt_no integer NOT NULL DEFAULT 1,
     status text NOT NULL DEFAULT 'submitted',
     submitted_at timestamptz NOT NULL DEFAULT CURRENT_TIMESTAMP,
     original_name text NOT NULL,
@@ -112,12 +114,14 @@ CREATE TABLE public.submissions (
     published_at timestamptz,
 
     CONSTRAINT submissions_assignment_fk FOREIGN KEY (assignment_id)
-        REFERENCES public.assignments (id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+        REFERENCES assignments (id) ON UPDATE RESTRICT ON DELETE RESTRICT,
     CONSTRAINT submissions_student_fk FOREIGN KEY (student_id)
-        REFERENCES public.users (id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+        REFERENCES users (id) ON UPDATE RESTRICT ON DELETE RESTRICT,
     CONSTRAINT submissions_curator_fk FOREIGN KEY (curator_id)
-        REFERENCES public.users (id) ON UPDATE RESTRICT ON DELETE RESTRICT,
-    CONSTRAINT submissions_assignment_student_unique UNIQUE (assignment_id, student_id),
+        REFERENCES users (id) ON UPDATE RESTRICT ON DELETE RESTRICT,
+    CONSTRAINT submissions_attempt_no_positive CHECK (attempt_no >= 1),
+    CONSTRAINT submissions_assignment_student_attempt_unique
+        UNIQUE (assignment_id, student_id, attempt_no),
     CONSTRAINT submissions_status_allowed CHECK (
         status IN ('submitted', 'under_review', 'revision_required', 'graded')
     ),
@@ -167,20 +171,76 @@ CREATE TABLE public.submissions (
     )
 );
 
-CREATE INDEX users_group_idx ON public.users (group_id);
-CREATE INDEX groups_curator_idx ON public.groups (curator_id);
+-- +goose StatementBegin
+CREATE FUNCTION enforce_submission_attempt()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    previous_attempt integer;
+    previous_status text;
+BEGIN
+    IF TG_OP = 'UPDATE' THEN
+        IF ROW(NEW.assignment_id, NEW.student_id, NEW.attempt_no)
+           IS DISTINCT FROM ROW(OLD.assignment_id, OLD.student_id, OLD.attempt_no) THEN
+            RAISE EXCEPTION 'Submission attempt identity cannot change'
+                USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    -- Serialize inserts for the assignment, including the first attempt.
+    PERFORM id FROM assignments WHERE id = NEW.assignment_id FOR NO KEY UPDATE;
+
+    SELECT attempt_no, status INTO previous_attempt, previous_status
+    FROM submissions
+    WHERE assignment_id = NEW.assignment_id AND student_id = NEW.student_id
+    ORDER BY attempt_no DESC
+    LIMIT 1
+    FOR SHARE;
+
+    IF FOUND THEN
+        IF NEW.attempt_no <= previous_attempt THEN
+            -- Let UNIQUE report duplicate attempt numbers.
+            IF EXISTS (
+                SELECT 1 FROM submissions
+                WHERE assignment_id = NEW.assignment_id AND student_id = NEW.student_id
+                  AND attempt_no = NEW.attempt_no
+            ) THEN
+                RETURN NEW;
+            END IF;
+        END IF;
+        IF previous_status <> 'revision_required'
+           OR NEW.attempt_no::bigint <> previous_attempt::bigint + 1 THEN
+            RAISE EXCEPTION 'A new attempt must follow a submission returned for revision'
+                USING ERRCODE = '23514';
+        END IF;
+    ELSIF NEW.attempt_no <> 1 THEN
+        RAISE EXCEPTION 'The first submission attempt must be numbered 1'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+-- +goose StatementEnd
+
+CREATE TRIGGER submissions_enforce_attempt
+BEFORE INSERT OR UPDATE OF assignment_id, student_id, attempt_no ON submissions
+FOR EACH ROW EXECUTE FUNCTION enforce_submission_attempt();
+
+CREATE INDEX users_group_idx ON users (group_id);
 CREATE INDEX assignments_group_status_deadline_idx
-    ON public.assignments (group_id, status, deadline);
+    ON assignments (group_id, status, deadline);
 CREATE INDEX assignments_student_status_deadline_idx
-    ON public.assignments (student_id, status, deadline);
-CREATE INDEX assignments_curator_idx ON public.assignments (curator_id);
-CREATE INDEX submissions_student_status_idx ON public.submissions (student_id, status);
-CREATE INDEX submissions_curator_status_idx ON public.submissions (curator_id, status);
+    ON assignments (student_id, status, deadline);
+CREATE INDEX submissions_student_status_idx ON submissions (student_id, status);
+CREATE INDEX submissions_curator_status_idx ON submissions (curator_id, status);
 
 -- +goose Down
 
-DROP TABLE public.submissions;
-DROP TABLE public.assignments;
-ALTER TABLE public.users DROP CONSTRAINT users_group_fk;
-DROP TABLE public.groups;
-DROP TABLE public.users;
+DROP TABLE IF EXISTS submissions;
+DROP FUNCTION IF EXISTS enforce_submission_attempt();
+DROP TABLE IF EXISTS assignments;
+ALTER TABLE IF EXISTS users DROP CONSTRAINT IF EXISTS users_group_fk;
+DROP TABLE IF EXISTS groups;
+DROP TABLE IF EXISTS users;
