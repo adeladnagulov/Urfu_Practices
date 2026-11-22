@@ -39,8 +39,8 @@
 
 ### 2. Авторизация
 
-#### POST /api/go/v1/auth/login
-Аутентификация пользователя. При успешном входе возвращает JWT-токен, который необходимо передавать в заголовке `Authorization: Bearer <token>` во всех последующих запросах к сервисам.
+#### POST /api/v1/auth/login
+Аутентификация пользователя. При успешном входе возвращает JWT-токен, который необходимо передавать в заголовке `Authorization: Bearer <token>` при обращении к защищённым endpoint'ам.
 
 **Request:**
 ```json
@@ -55,7 +55,7 @@
 {
   "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1NW...xyz",
   "token_type": "Bearer",
-  "expires_in": 86400,
+  "expires_in": 1800, // 30 мин
   "user": {
     "id": "550e8400-e29b-41d4-a716-446655440000",
     "email": "student@uni.ru",
@@ -67,9 +67,16 @@
 **Ошибки**
 401 invalid_credentials — неверный email или пароль
 Пример
-{"type": "...", "title": "Unauthorized", "status": 401, "detail": "Неверный email или пароль", "code": "invalid_credentials", "instance": "/api/go/v1/auth/login"}
+{
+  "type": "about:blank",
+  "title": "Unauthorized",
+  "status": 401,
+  "detail": "Неверный email или пароль",
+  "code": "invalid_credentials",
+  "instance": "/api/v1/auth/login"
+}
 
-#### GET /api/go/v1/auth/me
+#### GET /api/v1/auth/me
 Получить информацию о текущем пользователе по валидному JWT-токену.
 
 **Заголовок**
@@ -88,4 +95,26 @@ Authorization: Bearer <token>
 **Ошибки**
 401 unauthorized — токен отсутствует, истек или невалиден.
 Пример
-{"type": "...", "title": "Unauthorized", "status": 401, "detail": "Токен отсутствует, истек или невалиден", "code": "unauthorized", "instance": "/api/go/v1/auth/me"}
+{
+  "type": "about:blank",
+  "title": "Unauthorized",
+  "status": 401,
+  "detail": "Токен отсутствует, истёк или недействителен",
+  "code": "unauthorized",
+  "instance": "/api/v1/auth/me"
+}
+
+### 2.3. Правила авторизации
+
+- Все защищённые endpoint'ы требуют наличия валидного access-токена в заголовке Authorization: Bearer <access_token>.
+- Сервер самостоятельно определяет пользователя и его роль по проверенному JWT.
+- Административные endpoint'ы доступны только пользователям с ролью ADMIN.
+- При обращении авторизованного пользователя без необходимых прав сервер возвращает 403 Forbidden.
+- При истечении срока действия access-токена сервер возвращает 401 Unauthorized.
+- При истечении токена клиент должен предложить пользователю повторную авторизацию.
+
+### 2.4. Время жизни токена
+
+Access-токен действителен в течение 1800 секунд (30 минут) с момента выдачи.
+
+В текущей версии API refresh-токены не используются. Для продолжения работы после истечения access-токена пользователь должен пройти повторную авторизацию.
