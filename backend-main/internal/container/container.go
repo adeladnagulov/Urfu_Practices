@@ -2,6 +2,7 @@ package container
 
 import (
 	"Urfu_Practices/internal/config"
+	"Urfu_Practices/internal/http/health"
 	"Urfu_Practices/internal/infra/postgres"
 	txManager "Urfu_Practices/internal/infra/postgres/transaction"
 	"Urfu_Practices/internal/infra/telemetry"
@@ -29,5 +30,7 @@ func New(cfg *config.Config) (*Container, error) {
 	}
 
 	tm := txManager.NewTransactionManager(db.Pool, cfg.DatabaseQueryTimeout)
+
+	healthH := health.NewHandler(db.Pool)
 	return &Container{db: db}, nil
 }
