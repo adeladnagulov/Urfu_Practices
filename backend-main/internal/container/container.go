@@ -3,16 +3,21 @@ package container
 import (
 	"Urfu_Practices/internal/config"
 	"Urfu_Practices/internal/http/health"
+	"Urfu_Practices/internal/http/register"
 	"Urfu_Practices/internal/infra/postgres"
 	txManager "Urfu_Practices/internal/infra/postgres/transaction"
 	"Urfu_Practices/internal/infra/telemetry"
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
+
+	"github.com/go-chi/chi/v5"
 )
 
 type Container struct {
-	db *postgres.DB
+	srv *http.Server
+	db  *postgres.DB
 }
 
 func New(cfg *config.Config) (*Container, error) {
@@ -29,8 +34,20 @@ func New(cfg *config.Config) (*Container, error) {
 		return nil, fmt.Errorf("failed to load storage: %v", err)
 	}
 
-	tm := txManager.NewTransactionManager(db.Pool, cfg.DatabaseQueryTimeout)
+	_ = txManager.NewTransactionManager(db.Pool, cfg.DatabaseQueryTimeout)
 
 	healthH := health.NewHandler(db.Pool)
-	return &Container{db: db}, nil
+
+	r := chi.NewRouter()
+	register.RegisterRoutes(r, healthH)
+	srv := &http.Server{
+		Addr:              cfg.HttpAddr,
+		Handler:           r,
+		ReadTimeout:       cfg.HttpReadTimeout,
+		ReadHeaderTimeout: cfg.HttpReadHeaderTimeout,
+		WriteTimeout:      cfg.HttpWriteTimeout,
+		IdleTimeout:       cfg.HttpIdleTimeout,
+	}
+
+	return &Container{srv: srv, db: db}, nil
 }
