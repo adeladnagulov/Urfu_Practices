@@ -3,6 +3,7 @@ package container
 import (
 	"Urfu_Practices/internal/config"
 	"Urfu_Practices/internal/infra/postgres"
+	txManager "Urfu_Practices/internal/infra/postgres/transaction"
 	"Urfu_Practices/internal/infra/telemetry"
 	"context"
 	"fmt"
@@ -26,5 +27,7 @@ func New(cfg *config.Config) (*Container, error) {
 		)
 		return nil, fmt.Errorf("failed to load storage: %v", err)
 	}
+
+	tm := txManager.NewTransactionManager(db.Pool, cfg.DatabaseQueryTimeout)
 	return &Container{db: db}, nil
 }
