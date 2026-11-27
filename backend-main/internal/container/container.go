@@ -45,7 +45,7 @@ func New(cfg *config.Config) (*Container, error) {
 	healthH := health.NewHandler(db)
 
 	r := chi.NewRouter()
-	register.RegisterRoutes(r, healthH)
+	register.RegisterRoutes(r, logger, healthH)
 	srv := &http.Server{
 		Addr:              cfg.HttpAddr,
 		Handler:           r,
