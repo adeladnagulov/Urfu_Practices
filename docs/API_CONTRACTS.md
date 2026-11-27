@@ -124,17 +124,14 @@ Access-токен действителен в течение 1800 секунд (
 ### 3. Общие правила для эндпоинтов фронтенда
 
 #### 3.1. Роли
-`STUDENT`, `CURATOR`, `ADMIN` (в БД хранятся в нижнем регистре: `student`, `curator`, `admin`).
+Продуктом пользуются `STUDENT` и `CURATOR` (в БД роли хранятся в нижнем регистре). Роль `ADMIN` работает в админ-панели, её эндпоинты здесь не описываются.
 
 | Роль | Права |
 |---|---|
 | `STUDENT` | Состоит ровно в одной группе. Видит только опубликованные задания своей группы и личные задания, сдаёт работы, видит опубликованные результаты |
 | `CURATOR` | Ведёт свои группы: CRUD заданий, проверка сдач, оценивание, возврат на доработку |
-| `ADMIN` | Работает через админ-панель: пользователи, группы, просмотр всего. Отдельной роли модератора нет |
 
-Эндпоинты, доступные только админ-панели, находятся под `/api/v1/admin/...` (например, `GET /api/v1/reports` и `GET /api/v1/admin/reports`).
-
-Пользователей создаёт только `ADMIN`, самостоятельной регистрации нет.
+Самостоятельной регистрации нет: пользователей и группы заводят через админ-панель.
 
 Сервер сам фильтрует данные по роли: фронт не должен получать чужие данные, даже если в запросе подставлен чужой `id`.
 
@@ -212,86 +209,14 @@ Access-токен действителен в течение 1800 секунд (
 }
 ```
 
-#### GET /api/v1/admin/dashboard
-Главный экран админ-панели.
-
-**Response 200:**
-```json
-{
-  "role": "ADMIN",
-  "counters": { "groups": 4, "active_groups": 2, "students": 96, "curators": 5, "awaiting_review": 14 }
-}
-```
-
 ---
 
-### 5. Пользователи (админ-панель)
-
-#### GET /api/v1/admin/users
-Экран «Участники».
-
-**Query:** `role`, `group_id`, `is_active`, `search` (поиск по ФИО, логину и email), `page`, `page_size`, `sort` (`full_name`, `-created_at`).
-
-**Response 200:**
-```json
-{
-  "items": [
-    {
-      "id": "…",
-      "login": "ivanov",
-      "email": "student@uni.ru",
-      "full_name": "Иванов Иван Иванович",
-      "role": "STUDENT",
-      "is_active": true,
-      "group": { "id": "…", "name": "Учебная практика 2026 · РИ-330944" },
-      "created_at": "2026-09-01T08:00:00Z"
-    }
-  ],
-  "total": 1, "page": 1, "page_size": 20
-}
-```
-
-#### POST /api/v1/admin/users
-**Request:**
-```json
-{
-  "login": "ivanov",
-  "email": "student@uni.ru",
-  "full_name": "Иванов Иван Иванович",
-  "role": "STUDENT",
-  "group_id": "…",
-  "password": "TempPassword123!"
-}
-```
-`group_id` обязателен для `STUDENT` и должен быть `null` для `CURATOR` и `ADMIN`. Поэтому порядок заполнения такой: куратор → группа → студенты.
-**Response** `201 Created` — объект пользователя.
-**Ошибки:** `409 login_taken`, `409 email_taken`, `400 invalid_request`, `404 group_not_found`.
-
-#### GET /api/v1/admin/users/{id}
-**Response** `200 OK` — объект пользователя. **Ошибки:** `404 user_not_found`.
-
-#### PATCH /api/v1/admin/users/{id}
-Изменение ФИО, email, роли, группы студента, блокировка.
-```json
-{ "full_name": "…", "email": "…", "role": "STUDENT", "group_id": "…", "is_active": false }
-```
-**Response** `200 OK` — обновлённый пользователь.
-**Ошибки:** `409 user_has_related_data` — смена роли или группы при наличии заданий или сдач; `409 email_taken`.
-
-#### POST /api/v1/admin/users/{id}/reset-password
-```json
-{ "new_password": "TempPassword456!" }
-```
-**Response:** `204 No Content`
-
----
-
-### 6. Группы (курсы практики)
+### 5. Группы (курсы практики)
 
 Группа — это курс практики: даты, один куратор и студенты. Студент состоит ровно в одной группе (её задаёт `group_id` пользователя), куратор может вести несколько групп.
 
 #### GET /api/v1/groups
-`ADMIN` получает все группы, `CURATOR` — те, которые он ведёт, `STUDENT` — свою.
+`CURATOR` получает группы, которые он ведёт, `STUDENT` — свою.
 
 **Query:** `curator_id`, `active` (идёт сейчас), `search`, `page`, `page_size`.
 
@@ -314,36 +239,18 @@ Access-токен действителен в течение 1800 секунд (
 }
 ```
 
-#### POST /api/v1/admin/groups
-```json
-{
-  "name": "Учебная практика 2026 · РИ-330944",
-  "description": "",
-  "start_date": "2026-06-01",
-  "end_date": "2026-06-28",
-  "curator_id": "…"
-}
-```
-**Response** `201 Created`. **Ошибки:** `400 invalid_request` (например, `end_date` раньше `start_date` или `curator_id` указывает не на куратора).
-
 #### GET /api/v1/groups/{id}
 **Response** `200 OK` — объект группы. **Ошибки:** `404 group_not_found`.
 
-#### PATCH /api/v1/admin/groups/{id}
-Изменение полей, в том числе смена куратора (`curator_id`).
-
-#### DELETE /api/v1/admin/groups/{id}
-**Response:** `204 No Content`. **Ошибки:** `409 group_not_empty`.
-
-#### GET /api/v1/groups/{id}/students (ADMIN, куратор группы)
-Состав группы. Нужен для выбора личного получателя задания и для ведомости. Студент добавляется в группу через `POST /admin/users` или `PATCH /admin/users/{id}` с `group_id`.
+#### GET /api/v1/groups/{id}/students (куратор группы)
+Состав группы. Нужен для выбора личного получателя задания и для ведомости.
 ```json
 [ { "id": "…", "full_name": "Мария Орлова", "email": "orlova@uni.ru" } ]
 ```
 
 ---
 
-### 7. Задания
+### 6. Задания
 
 #### GET /api/v1/assignments
 Страница заданий с фильтрами.
@@ -414,7 +321,7 @@ Access-токен действителен в течение 1800 секунд (
 Переход `draft` → `published`. Сервер проверяет, что заполнены `description`, `deadline`, `criteria` и получатель (`group_id` или `student_id`); при незаполненных полях — `400 invalid_request` с перечнем полей в `detail`. Время публикации (`published_at`) ставит сервер.
 **Response** `200 OK` — опубликованное задание.
 
-#### GET /api/v1/assignments/{id}/submissions (CURATOR, ADMIN)
+#### GET /api/v1/assignments/{id}/submissions (CURATOR)
 Таблица на экране задания у куратора: **все** получатели, включая тех, кто ещё не сдал.
 
 **Query:** `student_state`.
@@ -437,12 +344,12 @@ Access-токен действителен в течение 1800 секунд (
 Сдача работы (форма с drag&drop). Тело — `multipart/form-data`, поле `file`. Проверяющим сервер назначает куратора группы студента.
 
 Заголовок `Idempotency-Key: <uuid>` защищает от дублей при повторной отправке формы.
-**Response** `201 Created` — объект сдачи (см. раздел 8) со статусом `submitted`.
+**Response** `201 Created` — объект сдачи (см. раздел 7) со статусом `submitted`.
 **Ошибки:** `409 submission_already_exists`, `409 assignment_not_published`, `409 deadline_passed`, `413 file_too_large`, `415 unsupported_file_type`.
 
 ---
 
-### 8. Сдачи и проверка
+### 7. Сдачи и проверка
 
 #### GET /api/v1/submissions
 - `STUDENT` — свои сдачи.
@@ -479,7 +386,7 @@ Access-токен действителен в течение 1800 секунд (
 Студент получает `result: null`, пока результат не опубликован.
 
 #### GET /api/v1/submissions/{id}/file
-Скачивание файла (автор сдачи, проверяющий куратор, админ). Ответ — бинарный, см. раздел 3.3.
+Скачивание файла (автор сдачи, проверяющий куратор). Ответ — бинарный, см. раздел 3.3.
 
 #### POST /api/v1/submissions/{id}/take (CURATOR — проверяющий)
 Взять сдачу на проверку: `submitted` → `under_review`. Просмотр сдачи (GET) статус не меняет. Повторный вызов возвращает `200` без изменений.
@@ -499,7 +406,7 @@ Access-токен действителен в течение 1800 секунд (
 
 ---
 
-### 9. Оценки и ведомость
+### 8. Оценки и ведомость
 
 #### GET /api/v1/grades/my (STUDENT)
 Страница «Оценки» студента. Возвращаются только опубликованные результаты.
@@ -521,7 +428,7 @@ Access-токен действителен в течение 1800 секунд (
 ```
 `total_score` — общая оценка: сумма опубликованных баллов.
 
-#### GET /api/v1/grades/sheet?group_id={id} (куратор группы, ADMIN)
+#### GET /api/v1/grades/sheet?group_id={id} (куратор группы)
 Ведомость группы: матрица «студенты × задания».
 ```json
 {
@@ -541,33 +448,29 @@ Access-токен действителен в течение 1800 секунд (
 ```
 Если `assigned: false`, задание этому студенту не назначено, и в ячейке выводится «Не назначено». В ячейках только опубликованные баллы.
 
-#### GET /api/v1/grades/export (куратор группы, ADMIN)
+#### GET /api/v1/grades/export (куратор группы)
 Выгрузка ведомости в Excel.
 **Query:** `group_id`, `format` (`xlsx` | `csv`).
 **Response** `200 OK` — файл; `Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` или `text/csv`.
 
 ---
 
-### 10. После MVP
+### 9. После MVP
 
 В схеме БД MVP для этих функций таблиц нет. Эндпоинты зафиксированы, чтобы заранее заложить UI; детали — когда появятся таблицы.
 
 #### Апелляции
-Апелляция — просьба студента пересмотреть опубликованную оценку. Студент подаёт её из карточки сдачи после `graded`, админ разбирает в админ-панели и либо оставляет оценку, либо выставляет новую.
+Апелляция — просьба студента пересмотреть опубликованную оценку. Студент подаёт её из карточки сдачи после `graded`, разбор апелляций выполняется в админ-панели.
 - `POST /api/v1/submissions/{id}/appeals` (STUDENT) — `{ "reason": "Не учтён раздел 3 отчёта" }`.
-- `GET /api/v1/appeals`, `GET /api/v1/appeals/{id}` (STUDENT — свои); `GET /api/v1/admin/appeals` (все). Статусы: `submitted` → `under_review` → `accepted` | `rejected`.
-- `POST /api/v1/admin/appeals/{id}/resolve` — `{ "decision": "accepted", "new_score": 8, "comment": "Раздел 3 засчитан" }`.
+- `GET /api/v1/appeals`, `GET /api/v1/appeals/{id}` (STUDENT — свои). Статусы: `submitted` → `under_review` → `accepted` | `rejected`.
 
 #### Уведомления
 - `GET /api/v1/notifications?unread=true` — `{ "unread_count": 3, "items": [ { "id", "type", "title", "text", "entity": { "type", "id" }, "is_read", "created_at" } ] }`. Типы: `assignment_published`, `result_published`, `deadline_soon`.
 - `POST /api/v1/notifications/read` — `{ "ids": ["…", "…"] }` или `{ "all": true }`.
 
-#### Журнал действий (админ-панель)
-- `GET /api/v1/admin/audit-logs?action=&actor_id=&from=&to=` — создание и изменение заданий, публикация результатов, смена ролей, вход. Элемент: `{ "id", "action", "actor": { "id", "full_name" }, "entity": { "type", "id" }, "changes", "created_at" }`.
-
 ---
 
-### 11. Сводная таблица эндпоинтов
+### 10. Сводная таблица эндпоинтов
 
 Все пути указаны относительно `/api/v1`.
 
@@ -590,18 +493,9 @@ Access-токен действителен в течение 1800 секунд (
 | PUT | /submissions/{id}/review | CURATOR | Сохранить результат без публикации | MVP |
 | POST | /submissions/{id}/review/publish | CURATOR | Опубликовать результат студенту | MVP |
 | GET | /grades/my | STUDENT | Мои оценки и общий балл | MVP |
-| GET | /grades/sheet | CURATOR, ADMIN | Ведомость «студенты × задания» | MVP |
-| GET | /grades/export | CURATOR, ADMIN | Выгрузка ведомости в Excel/CSV | Позже |
-| GET | /admin/dashboard | ADMIN | Главный экран админ-панели | MVP |
-| GET, POST | /admin/users | ADMIN | Список и создание пользователей | MVP |
-| GET, PATCH | /admin/users/{id} | ADMIN | Карточка, правка, блокировка | MVP |
-| POST | /admin/users/{id}/reset-password | ADMIN | Сброс пароля | MVP |
-| POST | /admin/groups | ADMIN | Создание группы | MVP |
-| PATCH, DELETE | /admin/groups/{id} | ADMIN | Правка и удаление группы | MVP |
+| GET | /grades/sheet | CURATOR | Ведомость «студенты × задания» | MVP |
+| GET | /grades/export | CURATOR | Выгрузка ведомости в Excel/CSV | Позже |
 | POST | /submissions/{id}/appeals | STUDENT | Подача апелляции | Позже |
 | GET | /appeals, /appeals/{id} | STUDENT | Свои апелляции | Позже |
-| GET | /admin/appeals | ADMIN | Все апелляции | Позже |
-| POST | /admin/appeals/{id}/resolve | ADMIN | Решение по апелляции | Позже |
 | GET | /notifications | все | Список уведомлений | Позже |
 | POST | /notifications/read | все | Отметить прочитанными | Позже |
-| GET | /admin/audit-logs | ADMIN | Журнал действий | Позже |
