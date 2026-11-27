@@ -39,8 +39,8 @@
 
 ### 2. Авторизация
 
-#### POST /api/go/v1/auth/login
-Аутентификация пользователя. При успешном входе возвращает JWT-токен, который необходимо передавать в заголовке `Authorization: Bearer <token>` во всех последующих запросах к сервисам.
+#### POST /api/v1/auth/login
+Аутентификация пользователя. При успешном входе возвращает JWT-токен, который необходимо передавать в заголовке `Authorization: Bearer <token>` при обращении к защищённым endpoint'ам.
 
 **Request:**
 ```json
@@ -55,7 +55,7 @@
 {
   "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI1NW...xyz",
   "token_type": "Bearer",
-  "expires_in": 86400,
+  "expires_in": 1800, // 30 мин
   "user": {
     "id": "550e8400-e29b-41d4-a716-446655440000",
     "email": "student@uni.ru",
@@ -67,9 +67,16 @@
 **Ошибки**
 401 invalid_credentials — неверный email или пароль
 Пример
-{"type": "...", "title": "Unauthorized", "status": 401, "detail": "Неверный email или пароль", "code": "invalid_credentials", "instance": "/api/go/v1/auth/login"}
+{
+  "type": "about:blank",
+  "title": "Unauthorized",
+  "status": 401,
+  "detail": "Неверный email или пароль",
+  "code": "invalid_credentials",
+  "instance": "/api/v1/auth/login"
+}
 
-#### GET /api/go/v1/auth/me
+#### GET /api/v1/auth/me
 Получить информацию о текущем пользователе по валидному JWT-токену.
 
 **Заголовок**
@@ -88,11 +95,35 @@ Authorization: Bearer <token>
 **Ошибки**
 401 unauthorized — токен отсутствует, истек или невалиден.
 Пример
-{"type": "...", "title": "Unauthorized", "status": 401, "detail": "Токен отсутствует, истек или невалиден", "code": "unauthorized", "instance": "/api/go/v1/auth/me"}
+{
+  "type": "about:blank",
+  "title": "Unauthorized",
+  "status": 401,
+  "detail": "Токен отсутствует, истёк или недействителен",
+  "code": "unauthorized",
+  "instance": "/api/v1/auth/me"
+}
+
+### 2.3. Правила авторизации
+
+- Все защищённые endpoint'ы требуют наличия валидного access-токена в заголовке Authorization: Bearer <access_token>.
+- Сервер самостоятельно определяет пользователя и его роль по проверенному JWT.
+- Административные endpoint'ы доступны только пользователям с ролью ADMIN.
+- При обращении авторизованного пользователя без необходимых прав сервер возвращает 403 Forbidden.
+- При истечении срока действия access-токена сервер возвращает 401 Unauthorized.
+- При истечении токена клиент должен предложить пользователю повторную авторизацию.
+
+### 2.4. Время жизни токена
+
+Access-токен действителен в течение 1800 секунд (30 минут) с момента выдачи.
+
+В текущей версии API refresh-токены не используются. Для продолжения работы после истечения access-токена пользователь должен пройти повторную авторизацию.
 
 ---
 
-### 1.1. Роли
+### 3. Общие правила для эндпоинтов фронтенда
+
+#### 3.1. Роли
 `STUDENT`, `CURATOR`, `ADMIN` (в БД хранятся в нижнем регистре: `student`, `curator`, `admin`).
 
 | Роль | Права |
@@ -101,13 +132,13 @@ Authorization: Bearer <token>
 | `CURATOR` | Ведёт свои группы: CRUD заданий, проверка сдач, оценивание, возврат на доработку |
 | `ADMIN` | Работает через админ-панель: пользователи, группы, просмотр всего. Отдельной роли модератора нет |
 
-Эндпоинты, доступные только админ-панели, находятся под `/api/go/v1/admin/...` (например, `GET /api/go/v1/reports` и `GET /api/go/v1/admin/reports`).
+Эндпоинты, доступные только админ-панели, находятся под `/api/v1/admin/...` (например, `GET /api/v1/reports` и `GET /api/v1/admin/reports`).
 
 Пользователей создаёт только `ADMIN`, самостоятельной регистрации нет.
 
 Сервер сам фильтрует данные по роли: фронт не должен получать чужие данные, даже если в запросе подставлен чужой `id`.
 
-### 1.2. Пагинация, сортировка, фильтры
+#### 3.2. Пагинация, сортировка, фильтры
 Все списки принимают параметры `?page=1&page_size=20` (максимум 100) и возвращают:
 ```json
 {
@@ -119,12 +150,12 @@ Authorization: Bearer <token>
 ```
 Сортировка: `?sort=deadline` (по возрастанию) или `?sort=-deadline` (по убыванию). Множественный фильтр передаётся через запятую: `?status=submitted,under_review`.
 
-### 1.3. Файлы
+#### 3.3. Файлы
 - Загрузка: `multipart/form-data`, поле `file`. Один файл на сдачу: PDF, DOCX или ZIP, от 1 байта до 20 000 000 байт. Тип проверяется по содержимому файла, а не по расширению.
 - Скачивание: бинарный ответ с заголовками `Content-Type` (исходный `mime_type`) и `Content-Disposition: attachment; filename*=UTF-8''<имя>`.
 - В списках и карточках возвращается только блок `file` с метаданными (`original_name`, `mime_type`, `size_bytes`, `download_url`), без содержимого.
 
-### 1.4. Статусы
+#### 3.4. Статусы
 
 **Задание** (`assignment.status`): `draft` → `published`. Создаётся всегда в статусе `draft`. Студенты видят задание только после публикации.
 
@@ -143,9 +174,9 @@ Authorization: Bearer <token>
 
 **Состояние задания для студента** (`student_state`, вычисляется сервером, не хранится): `not_submitted`, `overdue`, `submitted`, `under_review`, `revision_required`, `graded`. Используется для фильтров, бейджей и счётчиков на дашборде. Пока результат не опубликован, студент видит `under_review`.
 
-### 3. Дашборд
+### 4. Дашборд
 
-#### GET /api/go/v1/dashboard
+#### GET /api/v1/dashboard
 Все данные главного экрана одним запросом для `STUDENT` и `CURATOR`. Структура ответа зависит от роли (`role`).
 
 **Response 200 — STUDENT:**
@@ -181,7 +212,7 @@ Authorization: Bearer <token>
 }
 ```
 
-#### GET /api/go/v1/admin/dashboard
+#### GET /api/v1/admin/dashboard
 Главный экран админ-панели.
 
 **Response 200:**
@@ -194,9 +225,9 @@ Authorization: Bearer <token>
 
 ---
 
-### 4. Пользователи (админ-панель)
+### 5. Пользователи (админ-панель)
 
-#### GET /api/go/v1/admin/users
+#### GET /api/v1/admin/users
 Экран «Участники».
 
 **Query:** `role`, `group_id`, `is_active`, `search` (поиск по ФИО, логину и email), `page`, `page_size`, `sort` (`full_name`, `-created_at`).
@@ -220,7 +251,7 @@ Authorization: Bearer <token>
 }
 ```
 
-#### POST /api/go/v1/admin/users
+#### POST /api/v1/admin/users
 **Request:**
 ```json
 {
@@ -236,10 +267,10 @@ Authorization: Bearer <token>
 **Response** `201 Created` — объект пользователя.
 **Ошибки:** `409 login_taken`, `409 email_taken`, `400 invalid_request`, `404 group_not_found`.
 
-#### GET /api/go/v1/admin/users/{id}
+#### GET /api/v1/admin/users/{id}
 **Response** `200 OK` — объект пользователя. **Ошибки:** `404 user_not_found`.
 
-#### PATCH /api/go/v1/admin/users/{id}
+#### PATCH /api/v1/admin/users/{id}
 Изменение ФИО, email, роли, группы студента, блокировка.
 ```json
 { "full_name": "…", "email": "…", "role": "STUDENT", "group_id": "…", "is_active": false }
@@ -247,7 +278,7 @@ Authorization: Bearer <token>
 **Response** `200 OK` — обновлённый пользователь.
 **Ошибки:** `409 user_has_related_data` — смена роли или группы при наличии заданий или сдач; `409 email_taken`.
 
-#### POST /api/go/v1/admin/users/{id}/reset-password
+#### POST /api/v1/admin/users/{id}/reset-password
 ```json
 { "new_password": "TempPassword456!" }
 ```
@@ -255,11 +286,11 @@ Authorization: Bearer <token>
 
 ---
 
-### 5. Группы (курсы практики)
+### 6. Группы (курсы практики)
 
 Группа — это курс практики: даты, один куратор и студенты. Студент состоит ровно в одной группе (её задаёт `group_id` пользователя), куратор может вести несколько групп.
 
-#### GET /api/go/v1/groups
+#### GET /api/v1/groups
 `ADMIN` получает все группы, `CURATOR` — те, которые он ведёт, `STUDENT` — свою.
 
 **Query:** `curator_id`, `active` (идёт сейчас), `search`, `page`, `page_size`.
@@ -283,7 +314,7 @@ Authorization: Bearer <token>
 }
 ```
 
-#### POST /api/go/v1/admin/groups
+#### POST /api/v1/admin/groups
 ```json
 {
   "name": "Учебная практика 2026 · РИ-330944",
@@ -295,16 +326,16 @@ Authorization: Bearer <token>
 ```
 **Response** `201 Created`. **Ошибки:** `400 invalid_request` (например, `end_date` раньше `start_date` или `curator_id` указывает не на куратора).
 
-#### GET /api/go/v1/groups/{id}
+#### GET /api/v1/groups/{id}
 **Response** `200 OK` — объект группы. **Ошибки:** `404 group_not_found`.
 
-#### PATCH /api/go/v1/admin/groups/{id}
+#### PATCH /api/v1/admin/groups/{id}
 Изменение полей, в том числе смена куратора (`curator_id`).
 
-#### DELETE /api/go/v1/admin/groups/{id}
+#### DELETE /api/v1/admin/groups/{id}
 **Response:** `204 No Content`. **Ошибки:** `409 group_not_empty`.
 
-#### GET /api/go/v1/groups/{id}/students (ADMIN, куратор группы)
+#### GET /api/v1/groups/{id}/students (ADMIN, куратор группы)
 Состав группы. Нужен для выбора личного получателя задания и для ведомости. Студент добавляется в группу через `POST /admin/users` или `PATCH /admin/users/{id}` с `group_id`.
 ```json
 [ { "id": "…", "full_name": "Мария Орлова", "email": "orlova@uni.ru" } ]
@@ -312,9 +343,9 @@ Authorization: Bearer <token>
 
 ---
 
-### 6. Задания
+### 7. Задания
 
-#### GET /api/go/v1/assignments
+#### GET /api/v1/assignments
 Страница заданий с фильтрами.
 - `STUDENT` получает только опубликованные задания своей группы и личные. В каждом элементе есть `my_submission` и `student_state`.
 - `CURATOR` получает свои задания, включая черновики. В каждом элементе есть `stats`.
@@ -350,7 +381,7 @@ Authorization: Bearer <token>
 "stats": { "recipients": 25, "not_submitted": 5, "submitted": 8, "under_review": 2, "revision_required": 1, "graded": 9 }
 ```
 
-#### POST /api/go/v1/assignments (CURATOR)
+#### POST /api/v1/assignments (CURATOR)
 Создание задания. Всегда в статусе `draft`. Для черновика обязательно только поле `title`.
 ```json
 {
@@ -366,24 +397,24 @@ Authorization: Bearer <token>
 Получатель — **либо** вся группа (`group_id`), **либо** один студент (`student_id`), но не оба сразу. В черновике оба поля могут быть пустыми. Группа должна быть группой куратора, студент — состоять в такой группе.
 **Response** `201 Created` — объект задания. **Ошибки:** `403 forbidden` (чужая группа), `400 invalid_request`.
 
-#### GET /api/go/v1/assignments/{id}
+#### GET /api/v1/assignments/{id}
 Карточка задания (модалка «Подробности задания»). Помимо полей задания, возвращается блок `permissions`, по которому фронт показывает или скрывает кнопки:
 ```json
 "permissions": { "can_edit": true, "can_delete": true, "can_publish": true, "can_submit": false }
 ```
 **Ошибки:** `404 assignment_not_found`.
 
-#### PATCH /api/go/v1/assignments/{id} (CURATOR — автор)
+#### PATCH /api/v1/assignments/{id} (CURATOR — автор)
 Тело то же, что при создании; передаются только изменённые поля. **Ошибки:** `409 assignment_locked_field`.
 
-#### DELETE /api/go/v1/assignments/{id} (CURATOR — автор)
+#### DELETE /api/v1/assignments/{id} (CURATOR — автор)
 Удалить можно только черновик. **Ошибки:** `409 invalid_status_transition`.
 
-#### POST /api/go/v1/assignments/{id}/publish (CURATOR — автор)
+#### POST /api/v1/assignments/{id}/publish (CURATOR — автор)
 Переход `draft` → `published`. Сервер проверяет, что заполнены `description`, `deadline`, `criteria` и получатель (`group_id` или `student_id`); при незаполненных полях — `400 invalid_request` с перечнем полей в `detail`. Время публикации (`published_at`) ставит сервер.
 **Response** `200 OK` — опубликованное задание.
 
-#### GET /api/go/v1/assignments/{id}/submissions (CURATOR, ADMIN)
+#### GET /api/v1/assignments/{id}/submissions (CURATOR, ADMIN)
 Таблица на экране задания у куратора: **все** получатели, включая тех, кто ещё не сдал.
 
 **Query:** `student_state`.
@@ -402,24 +433,24 @@ Authorization: Bearer <token>
 ]
 ```
 
-#### POST /api/go/v1/assignments/{id}/submissions (STUDENT)
+#### POST /api/v1/assignments/{id}/submissions (STUDENT)
 Сдача работы (форма с drag&drop). Тело — `multipart/form-data`, поле `file`. Проверяющим сервер назначает куратора группы студента.
 
 Заголовок `Idempotency-Key: <uuid>` защищает от дублей при повторной отправке формы.
-**Response** `201 Created` — объект сдачи (см. раздел 7) со статусом `submitted`.
+**Response** `201 Created` — объект сдачи (см. раздел 8) со статусом `submitted`.
 **Ошибки:** `409 submission_already_exists`, `409 assignment_not_published`, `409 deadline_passed`, `413 file_too_large`, `415 unsupported_file_type`.
 
 ---
 
-### 7. Сдачи и проверка
+### 8. Сдачи и проверка
 
-#### GET /api/go/v1/submissions
+#### GET /api/v1/submissions
 - `STUDENT` — свои сдачи.
 - `CURATOR` — сдачи, где он проверяющий. Очередь «ждут проверки»: `?status=submitted`.
 
 **Query:** `status`, `assignment_id`, `group_id`, `student_id`, `sort` (`-submitted_at`), `page`, `page_size`.
 
-#### GET /api/go/v1/submissions/{id}
+#### GET /api/v1/submissions/{id}
 Подробности сдачи (модалка «Подробности проверки»).
 ```json
 {
@@ -433,7 +464,7 @@ Authorization: Bearer <token>
     "original_name": "Отчёт.pdf",
     "mime_type": "application/pdf",
     "size_bytes": 1048576,
-    "download_url": "/api/go/v1/submissions/{id}/file"
+    "download_url": "/api/v1/submissions/{id}/file"
   },
   "result": {
     "decision": "accepted",
@@ -447,13 +478,13 @@ Authorization: Bearer <token>
 ```
 Студент получает `result: null`, пока результат не опубликован.
 
-#### GET /api/go/v1/submissions/{id}/file
-Скачивание файла (автор сдачи, проверяющий куратор, админ). Ответ — бинарный, см. раздел 1.3.
+#### GET /api/v1/submissions/{id}/file
+Скачивание файла (автор сдачи, проверяющий куратор, админ). Ответ — бинарный, см. раздел 3.3.
 
-#### POST /api/go/v1/submissions/{id}/take (CURATOR — проверяющий)
+#### POST /api/v1/submissions/{id}/take (CURATOR — проверяющий)
 Взять сдачу на проверку: `submitted` → `under_review`. Просмотр сдачи (GET) статус не меняет. Повторный вызов возвращает `200` без изменений.
 
-#### PUT /api/go/v1/submissions/{id}/review (CURATOR — проверяющий)
+#### PUT /api/v1/submissions/{id}/review (CURATOR — проверяющий)
 Сохранить результат проверки без публикации: студент его пока не видит. Работает только в статусе `under_review`, сохранённый результат можно перезаписать до публикации. Время проверки (`graded_at`) ставит сервер.
 ```json
 { "decision": "accepted", "score": 9, "feedback": "Хорошо, добавьте выводы" }
@@ -462,15 +493,15 @@ Authorization: Bearer <token>
 - при `accepted` поле `score` обязательно: целое число ≥ 0;
 - при `revision_required` поле `feedback` обязательно.
 
-#### POST /api/go/v1/submissions/{id}/review/publish (CURATOR — проверяющий)
+#### POST /api/v1/submissions/{id}/review/publish (CURATOR — проверяющий)
 Опубликовать результат студенту: `under_review` → `graded` (при `accepted`) или `revision_required`. Время публикации (`result_published_at`) ставит сервер. Можно передать то же тело, что в `PUT /review`, чтобы сохранить и опубликовать одним запросом. Опубликованный результат не меняется.
 **Response** `200 OK` — сдача. **Ошибки:** `409 invalid_status_transition`, `400 invalid_request`.
 
 ---
 
-### 8. Оценки и ведомость
+### 9. Оценки и ведомость
 
-#### GET /api/go/v1/grades/my (STUDENT)
+#### GET /api/v1/grades/my (STUDENT)
 Страница «Оценки» студента. Возвращаются только опубликованные результаты.
 ```json
 {
@@ -490,7 +521,7 @@ Authorization: Bearer <token>
 ```
 `total_score` — общая оценка: сумма опубликованных баллов.
 
-#### GET /api/go/v1/grades/sheet?group_id={id} (куратор группы, ADMIN)
+#### GET /api/v1/grades/sheet?group_id={id} (куратор группы, ADMIN)
 Ведомость группы: матрица «студенты × задания».
 ```json
 {
@@ -510,35 +541,35 @@ Authorization: Bearer <token>
 ```
 Если `assigned: false`, задание этому студенту не назначено, и в ячейке выводится «Не назначено». В ячейках только опубликованные баллы.
 
-#### GET /api/go/v1/grades/export (куратор группы, ADMIN)
+#### GET /api/v1/grades/export (куратор группы, ADMIN)
 Выгрузка ведомости в Excel.
 **Query:** `group_id`, `format` (`xlsx` | `csv`).
 **Response** `200 OK` — файл; `Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet` или `text/csv`.
 
 ---
 
-### 9. После MVP
+### 10. После MVP
 
 В схеме БД MVP для этих функций таблиц нет. Эндпоинты зафиксированы, чтобы заранее заложить UI; детали — когда появятся таблицы.
 
 #### Апелляции
 Апелляция — просьба студента пересмотреть опубликованную оценку. Студент подаёт её из карточки сдачи после `graded`, админ разбирает в админ-панели и либо оставляет оценку, либо выставляет новую.
-- `POST /api/go/v1/submissions/{id}/appeals` (STUDENT) — `{ "reason": "Не учтён раздел 3 отчёта" }`.
-- `GET /api/go/v1/appeals`, `GET /api/go/v1/appeals/{id}` (STUDENT — свои); `GET /api/go/v1/admin/appeals` (все). Статусы: `submitted` → `under_review` → `accepted` | `rejected`.
-- `POST /api/go/v1/admin/appeals/{id}/resolve` — `{ "decision": "accepted", "new_score": 8, "comment": "Раздел 3 засчитан" }`.
+- `POST /api/v1/submissions/{id}/appeals` (STUDENT) — `{ "reason": "Не учтён раздел 3 отчёта" }`.
+- `GET /api/v1/appeals`, `GET /api/v1/appeals/{id}` (STUDENT — свои); `GET /api/v1/admin/appeals` (все). Статусы: `submitted` → `under_review` → `accepted` | `rejected`.
+- `POST /api/v1/admin/appeals/{id}/resolve` — `{ "decision": "accepted", "new_score": 8, "comment": "Раздел 3 засчитан" }`.
 
 #### Уведомления
-- `GET /api/go/v1/notifications?unread=true` — `{ "unread_count": 3, "items": [ { "id", "type", "title", "text", "entity": { "type", "id" }, "is_read", "created_at" } ] }`. Типы: `assignment_published`, `result_published`, `deadline_soon`.
-- `POST /api/go/v1/notifications/read` — `{ "ids": ["…", "…"] }` или `{ "all": true }`.
+- `GET /api/v1/notifications?unread=true` — `{ "unread_count": 3, "items": [ { "id", "type", "title", "text", "entity": { "type", "id" }, "is_read", "created_at" } ] }`. Типы: `assignment_published`, `result_published`, `deadline_soon`.
+- `POST /api/v1/notifications/read` — `{ "ids": ["…", "…"] }` или `{ "all": true }`.
 
 #### Журнал действий (админ-панель)
-- `GET /api/go/v1/admin/audit-logs?action=&actor_id=&from=&to=` — создание и изменение заданий, публикация результатов, смена ролей, вход. Элемент: `{ "id", "action", "actor": { "id", "full_name" }, "entity": { "type", "id" }, "changes", "created_at" }`.
+- `GET /api/v1/admin/audit-logs?action=&actor_id=&from=&to=` — создание и изменение заданий, публикация результатов, смена ролей, вход. Элемент: `{ "id", "action", "actor": { "id", "full_name" }, "entity": { "type", "id" }, "changes", "created_at" }`.
 
 ---
 
-### 10. Сводная таблица эндпоинтов
+### 11. Сводная таблица эндпоинтов
 
-Все пути указаны относительно `/api/go/v1`.
+Все пути указаны относительно `/api/v1`.
 
 | Метод | Путь | Роли | Описание | Приоритет |
 |---|---|---|---|---|
