@@ -17,3 +17,6 @@ migrate: ## Накатить миграции на базу данных
 
 migrate-down: ## Откатить последнюю миграцию
 	$(GO) tool goose -dir migrations postgres "$(DATABASE_URL)" down
+
+run: ## Запустить го бекенд локально
+	cd backend-main && $(GO) run ./cmd/api

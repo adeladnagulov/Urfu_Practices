@@ -11,8 +11,9 @@ func RegisterRoutes(r chi.Router,
 ) {
 	//middleware
 
+	r.Get("/health", healthHandler.Health)
+	r.Get("/ready", healthHandler.Ready)
+
 	r.Route("/api/v1", func(r chi.Router) {
-		r.Get("/health", healthHandler.Health)
-		r.Get("/ready", healthHandler.Ready)
 	})
 }

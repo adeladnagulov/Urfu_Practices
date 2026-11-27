@@ -9,7 +9,7 @@ import (
 )
 
 type DbPinger interface {
-	Ping(ctx context.Context) error
+	PingDb(ctx context.Context) error
 }
 
 type Handler struct {
@@ -32,7 +32,7 @@ func (h *Handler) Health(w http.ResponseWriter, _ *http.Request) {
 
 // (GET /ready)
 func (h *Handler) Ready(w http.ResponseWriter, r *http.Request) {
-	if err := h.db.Ping(r.Context()); err != nil {
+	if err := h.db.PingDb(r.Context()); err != nil {
 		status, problem := domainerror.Problem(err, r)
 		response.Problem(w, status, problem)
 		return

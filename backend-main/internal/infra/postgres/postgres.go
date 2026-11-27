@@ -43,6 +43,6 @@ func (db *DB) Close() {
 	}
 }
 
-func (db *DB) PingTrip(ctx context.Context) error {
+func (db *DB) PingDb(ctx context.Context) error {
 	return db.Pool.Ping(ctx)
 }
