@@ -189,8 +189,8 @@ BEGIN
         RETURN NEW;
     END IF;
 
-    -- Serialize inserts for the assignment, including the first attempt.
-    PERFORM id FROM assignments WHERE id = NEW.assignment_id FOR NO KEY UPDATE;
+    -- Serialize attempts only for the same assignment and student.
+    PERFORM pg_advisory_xact_lock(NEW.assignment_id, NEW.student_id);
 
     SELECT attempt_no, status INTO previous_attempt, previous_status
     FROM submissions
@@ -229,6 +229,8 @@ BEFORE INSERT OR UPDATE OF assignment_id, student_id, attempt_no ON submissions
 FOR EACH ROW EXECUTE FUNCTION enforce_submission_attempt();
 
 CREATE INDEX users_group_idx ON users (group_id);
+CREATE INDEX groups_curator_idx ON groups (curator_id);
+CREATE INDEX assignments_curator_idx ON assignments (curator_id);
 CREATE INDEX assignments_group_status_deadline_idx
     ON assignments (group_id, status, deadline);
 CREATE INDEX assignments_student_status_deadline_idx
